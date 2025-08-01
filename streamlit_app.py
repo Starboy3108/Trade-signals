@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 import json
 from dataclasses import dataclass
 
-# Optionally enable yfinance
+# Try to import yfinance for API candles
 try:
     import yfinance as yf
     YF_OK = True
@@ -60,8 +60,8 @@ class TradeLogger:
 def detect_supply_demand_zones(data, window=20):
     lows = data['low'].rolling(window).min()
     highs = data['high'].rolling(window).max()
-    demand = data['close'] <= lows.shift(1)
-    supply = data['close'] >= highs.shift(1)
+    demand = (data['close'] <= lows.shift(1)).fillna(False)
+    supply = (data['close'] >= highs.shift(1)).fillna(False)
     return demand, supply
 
 class ProSignalStrategy:
@@ -71,7 +71,9 @@ class ProSignalStrategy:
     def name(self): return self._name
     def generate_signals(self, data):
         data = data.copy()
-        # Standard indicators
+        if data.empty:
+            data['signal'] = 'hold'
+            return data
         data['short_ma'] = data['close'].rolling(14).mean()
         data['long_ma'] = data['close'].rolling(45).mean()
         delta = data['close'].diff()
@@ -81,19 +83,19 @@ class ProSignalStrategy:
         data['rsi'] = 100 - (100 / (1 + rs))
         data['atr'] = (data['high']-data['low']).rolling(10).mean()
         demand, supply = detect_supply_demand_zones(data)
-        data['signal'] = 'hold'
         buy_conf = (
-            (data['short_ma'] > data['long_ma'])
-            & (data['rsi'] < 35)
-            & (demand)
-            & (data['atr'] > data['atr'].rolling(30).mean())
-        )
+            (data['short_ma'] > data['long_ma']) &
+            (data['rsi'] < 35) &
+            (demand == True) &
+            (data['atr'] > data['atr'].rolling(30).mean())
+        ).fillna(False)
         sell_conf = (
-            (data['short_ma'] < data['long_ma'])
-            & (data['rsi'] > 65)
-            & (supply)
-            & (data['atr'] > data['atr'].rolling(30).mean())
-        )
+            (data['short_ma'] < data['long_ma']) &
+            (data['rsi'] > 65) &
+            (supply == True) &
+            (data['atr'] > data['atr'].rolling(30).mean())
+        ).fillna(False)
+        data['signal'] = 'hold'
         data.loc[buy_conf, 'signal'] = 'buy'
         data.loc[sell_conf, 'signal'] = 'sell'
         return data
@@ -112,8 +114,8 @@ class SignalGenerator:
                 if sig != 'hold':
                     active.append(strat.name)
                     conf = min(1.0, abs(
-                        (s_data['atr'].iloc[-1] / (s_data['atr'].rolling(30).mean().iloc[-1] + 1e-6))
-                    ))  # Use volatility spike as a "confidence" proxy (for demo)
+                        float(s_data['atr'].iloc[-1]) / (float(s_data['atr'].rolling(30).mean().iloc[-1]) + 1e-6)
+                    )) if not pd.isnull(s_data['atr'].iloc[-1]) and not pd.isnull(s_data['atr'].rolling(30).mean().iloc[-1]) else 0.0
                     if conf > best_conf:
                         best_conf = conf
                         best_signal = sig
