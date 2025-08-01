@@ -12,7 +12,7 @@ import json
 from dataclasses import dataclass
 from collections import defaultdict
 
-# === Optionally enable yfinance: uncomment this and add 'yfinance' to requirements.txt ===
+# --- Try to import yfinance for live candles ---
 try:
     import yfinance as yf
     YF_OK = True
@@ -23,7 +23,7 @@ TRADE_HISTORY_PATH = '/tmp/trade_history.csv'
 WEIGHTS_PATH = '/tmp/strategy_weights.json'
 EVOLUTION_LOG_PATH = '/tmp/algorithm_evolution_log.md'
 SUPPORTED_TIMEFRAMES = {"1 Min": 1, "3 Min": 3, "5 Min": 5, "15 Min": 15}
-PAIRS = ["EURUSD=X", "GBPUSD=X", "USDJPY=X"]  # yfinance forex ticker codes
+PAIRS = ["EURUSD=X", "GBPUSD=X", "USDJPY=X"]  # yfinance FX tickers
 
 def ensure_file_exists(path, template=None):
     if not os.path.exists(path):
@@ -67,16 +67,9 @@ class TradeLogger:
             df.at[idx[0], "rating"] = "auto"
             df.to_csv(self.path, index=False)
 
-# --- Strategies ---
-class BaseStrategy:
+class MovingAverageCrossover:
     @property
-    def name(self): raise NotImplementedError
-    def generate_signals(self, data): raise NotImplementedError
-
-class MovingAverageCrossover(BaseStrategy):
-    def __init__(self, short=20, long=50): self._name=f"MA_Crossover({short},{long})"
-    @property
-    def name(self): return self._name
+    def name(self): return f"MA_Crossover(20,50)"
     def generate_signals(self, data):
         data['short_ma'] = data['close'].rolling(20).mean()
         data['long_ma'] = data['close'].rolling(50).mean()
@@ -84,10 +77,9 @@ class MovingAverageCrossover(BaseStrategy):
         data['signal'] = data['signal'].shift(1).fillna('hold')
         return data
 
-class RSIStrategy(BaseStrategy):
-    def __init__(self): self._name = "RSI(14,70,30)"
+class RSIStrategy:
     @property
-    def name(self): return self._name
+    def name(self): return "RSI(14,70,30)"
     def generate_signals(self, data):
         delta = data['close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(14).mean()
@@ -122,7 +114,6 @@ class SignalGenerator:
             return [{"timestamp":datetime.now().strftime('%Y-%m-%d %H:%M:%S'),"pair":pair,"signal":"sell","confidence":confidence,"reasoning":', '.join(active), "timeframe":timeframe}]
         else: return []
 
-# --- Simulated price and auto-resolution (fallback for API) ---
 def price_simulation(last, tf_min):
     drift = random.uniform(-0.001, 0.001)*tf_min
     shock = random.gauss(0, 0.002)*tf_min
@@ -140,7 +131,6 @@ class LiveDataFetcher:
                     return df.reset_index(drop=True)
             except Exception as e:
                 st.warning(f"API error: {e}; using simulation.", icon="⚠️")
-        # Simulate
         base = 1.2 + random.uniform(-0.05,0.05)
         increments = np.cumsum(np.random.normal(0, 0.002, 100))
         close = [round(base + float(inc),5) for inc in increments]
@@ -187,12 +177,10 @@ def resolve_open_trades(use_live=False):
         df.to_csv(TRADE_HISTORY_PATH, index=False)
         st.toast("Pending trades auto-graded.", icon="⏰")
 
-# ------------ STREAMLIT UI ------------
-
 st.set_page_config(page_title="IQ Trading Assistant", layout="wide", page_icon="💡")
 st.title("🤖 High-IQ, API-Powered Trading Assistant")
 
-live_mode = st.sidebar.toggle("Live Data (yfinance)", False, help="Use real candles from Yahoo! Finance (1m/5m/15m). Otherwise, run smooth and fast with simulation.")
+live_mode = st.sidebar.toggle("Live Data (yfinance)", False, help="Use real candles from Yahoo! Finance (1m/5m/15m). Otherwise, fast simulation.")
 
 resolve_open_trades(use_live=live_mode and YF_OK)
 if 'trade_history' not in st.session_state:
