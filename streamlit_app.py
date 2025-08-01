@@ -12,7 +12,7 @@ import json
 from dataclasses import dataclass
 from collections import defaultdict
 
-# --- Try to import yfinance for live candles ---
+# API: yfinance for live data (forex, stocks, crypto)
 try:
     import yfinance as yf
     YF_OK = True
@@ -20,27 +20,18 @@ except Exception:
     YF_OK = False
 
 TRADE_HISTORY_PATH = '/tmp/trade_history.csv'
-WEIGHTS_PATH = '/tmp/strategy_weights.json'
-EVOLUTION_LOG_PATH = '/tmp/algorithm_evolution_log.md'
 SUPPORTED_TIMEFRAMES = {"1 Min": 1, "3 Min": 3, "5 Min": 5, "15 Min": 15}
-PAIRS = ["EURUSD=X", "GBPUSD=X", "USDJPY=X"]  # yfinance FX tickers
+PAIRS = ["EURUSD=X", "GBPUSD=X", "USDJPY=X"]
 
-def ensure_file_exists(path, template=None):
+def ensure_file_exists(path):
     if not os.path.exists(path):
-        if path.endswith('.csv'):
-            pd.DataFrame(template if template else []).to_csv(path, index=False)
-        elif path.endswith('.json'):
-            with open(path, 'w') as f: json.dump({}, f)
-        elif path.endswith('.md'):
-            with open(path, 'w') as f: f.write("# Algorithm Evolution Log\n")
+        pd.DataFrame([{
+            "trade_id":"", "timestamp":"", "pair":"", "signal":"", "confidence":"", 
+            "reasoning":"", "outcome":"", "rating":"", "user_comment":"",
+            "timeframe":"", "entry_price":"", "expiry_time":"", "exit_price":""
+        }]).to_csv(path, index=False)
 
-ensure_file_exists(TRADE_HISTORY_PATH, [{
-    "trade_id":"", "timestamp":"", "pair":"", "signal":"", "confidence":"", 
-    "reasoning":"", "outcome":"", "rating":"", "user_comment":"",
-    "timeframe":"", "entry_price":"", "expiry_time":"", "exit_price":""
-}])
-ensure_file_exists(WEIGHTS_PATH, [{}])
-ensure_file_exists(EVOLUTION_LOG_PATH, [{}])
+ensure_file_exists(TRADE_HISTORY_PATH)
 
 @dataclass
 class SignalFeedback:
@@ -92,18 +83,15 @@ class RSIStrategy:
         return data
 
 class SignalGenerator:
-    def __init__(self, strategies, weights_path=WEIGHTS_PATH):
-        self.strategies, self.weights_path = strategies, weights_path
+    def __init__(self, strategies): self.strategies = strategies
     def run(self, data, pair, timeframe="1m"):
-        try: weights = defaultdict(lambda: 1.0, json.load(open(self.weights_path)))
-        except: weights = defaultdict(lambda: 1.0)
         buy, sell, active = 0.0, 0.0, []
         for strat in self.strategies:
             s_data = strat.generate_signals(data.copy())
             if not s_data.empty and 'signal' in s_data.columns:
                 sig = s_data['signal'].iloc[-1]
                 if sig != 'hold':
-                    w = weights.get(strat.name,1.0)
+                    w = 1.0
                     if sig=='buy': buy+=w
                     else: sell+=w
                     active.append(strat.name)
@@ -121,11 +109,9 @@ def price_simulation(last, tf_min):
 
 class LiveDataFetcher:
     def get_live_forex_data(self, pair, tfmin, live=False):
-        # Live data: yfinance
         if live and YF_OK:
             try:
-                interval = f"{tfmin}m"
-                k = yf.download(tickers=pair, period="2d", interval=interval, progress=False)
+                k = yf.download(tickers=pair, period="2d", interval=f"{tfmin}m", progress=False)
                 if not k.empty:
                     df = k.rename(columns={'Open':'open','High':'high','Low':'low','Close':'close'})
                     return df.reset_index(drop=True)
@@ -141,33 +127,34 @@ class LiveDataFetcher:
         data.index = pd.date_range(end=datetime.now(), periods=100, freq='1min')
         return data
 
-class AnalyticsEngine:
-    def __init__(self, log_path=TRADE_HISTORY_PATH): self.log_path = log_path
-    def get_summary(self):
-        try: df = pd.read_csv(self.log_path)
-        except: return {"win_rate":"N/A", "total":0}
-        completed = df[df['outcome'].isin(['win','loss'])]
-        if completed.empty: return {"win_rate":"0.00%","total":0}
-        wins = len(completed[completed['outcome']=='win'])
-        total = len(completed)
-        return {"win_rate":f"{(wins/total)*100:.2f}%","total":total}
-
 def resolve_open_trades(use_live=False):
     df = pd.read_csv(TRADE_HISTORY_PATH)
     now = datetime.now()
     updated = False
-    for idx,row in df[df['outcome']=='pending'].iterrows():
-        expiry = pd.to_datetime(row["expiry_time"])
+    for idx, row in df[df['outcome']=='pending'].iterrows():
+        # FIX: Only resolve if "expiry_time" field exists, is not blank/NaN, and is convertible
+        try:
+            # Avoid KeyError and blank/NaN/None
+            expiry_str = row.get("expiry_time", "")
+            if pd.isna(expiry_str) or not str(expiry_str).strip():
+                continue
+            expiry = pd.to_datetime(expiry_str, errors='coerce')
+            if pd.isna(expiry):
+                continue
+        except Exception:
+            continue
         if now >= expiry:
-            tf = int(row["timeframe"].replace("m","").replace("Min",""))
-            entry = float(row["entry_price"])
+            tf = int(str(row.get("timeframe", "1")).replace("m", "").replace("Min", "").strip())
+            entry_str = row.get("entry_price", "0")
+            try: entry = float(entry_str or 0)
+            except: entry = 0
             if use_live and YF_OK:
                 fetcher = LiveDataFetcher()
                 ticks = fetcher.get_live_forex_data(row['pair'], tf, live=True)
                 exit_price = float(ticks['close'].iloc[-1]) if ticks is not None and not ticks.empty else price_simulation(entry, tf)
             else:
                 exit_price = price_simulation(entry, tf)
-            direction = row["signal"]
+            direction = row.get("signal", "buy")
             outcome = "win" if (exit_price > entry if direction == "buy" else exit_price < entry) else "loss"
             df.at[idx, "exit_price"] = exit_price
             df.at[idx, "outcome"] = outcome
@@ -177,10 +164,12 @@ def resolve_open_trades(use_live=False):
         df.to_csv(TRADE_HISTORY_PATH, index=False)
         st.toast("Pending trades auto-graded.", icon="⏰")
 
+# -------- Streamlit UI --------
+
 st.set_page_config(page_title="IQ Trading Assistant", layout="wide", page_icon="💡")
 st.title("🤖 High-IQ, API-Powered Trading Assistant")
 
-live_mode = st.sidebar.toggle("Live Data (yfinance)", False, help="Use real candles from Yahoo! Finance (1m/5m/15m). Otherwise, fast simulation.")
+live_mode = st.sidebar.toggle("Live Data (yfinance)", False, help="Use real candles from Yahoo! Finance (1m/5m/15m only). Otherwise, fast simulation.")
 
 resolve_open_trades(use_live=live_mode and YF_OK)
 if 'trade_history' not in st.session_state:
@@ -228,7 +217,14 @@ else:
 col1,col2 = st.columns(2)
 with col1:
     st.subheader("📈 Analytics")
-    summary = AnalyticsEngine().get_summary()
+    summary = {"win_rate":"N/A","total":0}
+    try:
+        completed = df_trades[df_trades['outcome'].isin(['win','loss'])]
+        if not completed.empty:
+            wins = len(completed[completed['outcome']=='win'])
+            summary["win_rate"] = f"{(wins/len(completed))*100:.2f}%"
+            summary["total"] = len(completed)
+    except: pass
     st.metric("Win Rate", summary['win_rate'])
     st.metric("Completed Trades", summary['total'])
 
@@ -250,13 +246,6 @@ with col2:
                 refresh_data()
     else:
         st.info("No pending trades to rate.")
-
-with st.expander("📜 Algorithm Evolution Log"):
-    if os.path.exists(EVOLUTION_LOG_PATH):
-        with open(EVOLUTION_LOG_PATH) as f:
-            st.markdown(f.read())
-    else:
-        st.warning("No evolution log found.")
 
 st.sidebar.header("📥 Export")
 export = df_trades.to_csv(index=False).encode()
