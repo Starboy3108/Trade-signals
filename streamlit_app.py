@@ -10,9 +10,8 @@ import time
 from datetime import datetime, timedelta
 import json
 from dataclasses import dataclass
-from collections import defaultdict
 
-# API: yfinance for live data (forex, stocks, crypto)
+# Optionally enable yfinance
 try:
     import yfinance as yf
     YF_OK = True
@@ -58,49 +57,78 @@ class TradeLogger:
             df.at[idx[0], "rating"] = "auto"
             df.to_csv(self.path, index=False)
 
-class MovingAverageCrossover:
-    @property
-    def name(self): return f"MA_Crossover(20,50)"
-    def generate_signals(self, data):
-        data['short_ma'] = data['close'].rolling(20).mean()
-        data['long_ma'] = data['close'].rolling(50).mean()
-        data['signal'] = np.where(data['short_ma'] > data['long_ma'], 'buy', 'sell')
-        data['signal'] = data['signal'].shift(1).fillna('hold')
-        return data
+def detect_supply_demand_zones(data, window=20):
+    lows = data['low'].rolling(window).min()
+    highs = data['high'].rolling(window).max()
+    demand = data['close'] <= lows.shift(1)
+    supply = data['close'] >= highs.shift(1)
+    return demand, supply
 
-class RSIStrategy:
+class ProSignalStrategy:
+    def __init__(self):
+        self._name = "MA, RSI, S/D, Volatility Multi-confirm"
     @property
-    def name(self): return "RSI(14,70,30)"
+    def name(self): return self._name
     def generate_signals(self, data):
+        data = data.copy()
+        # Standard indicators
+        data['short_ma'] = data['close'].rolling(14).mean()
+        data['long_ma'] = data['close'].rolling(45).mean()
         delta = data['close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
         rs = gain / (loss.replace(0, 1e-6))
         data['rsi'] = 100 - (100 / (1 + rs))
+        data['atr'] = (data['high']-data['low']).rolling(10).mean()
+        demand, supply = detect_supply_demand_zones(data)
         data['signal'] = 'hold'
-        data.loc[(data['rsi'].shift(1) < 30) & (data['rsi'] >= 30), 'signal'] = 'buy'
-        data.loc[(data['rsi'].shift(1) > 70) & (data['rsi'] <= 70), 'signal'] = 'sell'
+        buy_conf = (
+            (data['short_ma'] > data['long_ma'])
+            & (data['rsi'] < 35)
+            & (demand)
+            & (data['atr'] > data['atr'].rolling(30).mean())
+        )
+        sell_conf = (
+            (data['short_ma'] < data['long_ma'])
+            & (data['rsi'] > 65)
+            & (supply)
+            & (data['atr'] > data['atr'].rolling(30).mean())
+        )
+        data.loc[buy_conf, 'signal'] = 'buy'
+        data.loc[sell_conf, 'signal'] = 'sell'
         return data
 
 class SignalGenerator:
     def __init__(self, strategies): self.strategies = strategies
     def run(self, data, pair, timeframe="1m"):
-        buy, sell, active = 0.0, 0.0, []
+        best_signal = None
+        best_conf = 0
+        active = []
         for strat in self.strategies:
             s_data = strat.generate_signals(data.copy())
             if not s_data.empty and 'signal' in s_data.columns:
-                sig = s_data['signal'].iloc[-1]
+                idx = s_data.index[-1]
+                sig = s_data.loc[idx, 'signal']
                 if sig != 'hold':
-                    w = 1.0
-                    if sig=='buy': buy+=w
-                    else: sell+=w
                     active.append(strat.name)
-        confidence = round(max(buy, sell)/(buy+sell+1e-9),3) if (buy+sell)>0 else 0
-        if buy>sell and confidence>0.6:
-            return [{"timestamp":datetime.now().strftime('%Y-%m-%d %H:%M:%S'),"pair":pair,"signal":"buy","confidence":confidence,"reasoning":', '.join(active), "timeframe":timeframe}]
-        elif sell>buy and confidence>0.6:
-            return [{"timestamp":datetime.now().strftime('%Y-%m-%d %H:%M:%S'),"pair":pair,"signal":"sell","confidence":confidence,"reasoning":', '.join(active), "timeframe":timeframe}]
-        else: return []
+                    conf = min(1.0, abs(
+                        (s_data['atr'].iloc[-1] / (s_data['atr'].rolling(30).mean().iloc[-1] + 1e-6))
+                    ))  # Use volatility spike as a "confidence" proxy (for demo)
+                    if conf > best_conf:
+                        best_conf = conf
+                        best_signal = sig
+        confidence = round(best_conf,3)
+        if best_signal and confidence > 0.7:
+            return [{
+                "timestamp":datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                "pair":pair,
+                "signal":best_signal,
+                "confidence":confidence,
+                "reasoning":', '.join(active),
+                "timeframe":timeframe
+            }]
+        else:
+            return []
 
 def price_simulation(last, tf_min):
     drift = random.uniform(-0.001, 0.001)*tf_min
@@ -132,9 +160,7 @@ def resolve_open_trades(use_live=False):
     now = datetime.now()
     updated = False
     for idx, row in df[df['outcome']=='pending'].iterrows():
-        # FIX: Only resolve if "expiry_time" field exists, is not blank/NaN, and is convertible
         try:
-            # Avoid KeyError and blank/NaN/None
             expiry_str = row.get("expiry_time", "")
             if pd.isna(expiry_str) or not str(expiry_str).strip():
                 continue
@@ -164,12 +190,10 @@ def resolve_open_trades(use_live=False):
         df.to_csv(TRADE_HISTORY_PATH, index=False)
         st.toast("Pending trades auto-graded.", icon="⏰")
 
-# -------- Streamlit UI --------
-
 st.set_page_config(page_title="IQ Trading Assistant", layout="wide", page_icon="💡")
-st.title("🤖 High-IQ, API-Powered Trading Assistant")
+st.title("🤖 Pro Pattern, API-Powered Trading Assistant")
 
-live_mode = st.sidebar.toggle("Live Data (yfinance)", False, help="Use real candles from Yahoo! Finance (1m/5m/15m only). Otherwise, fast simulation.")
+live_mode = st.sidebar.toggle("Live Data (yfinance)", False, help="Use real candles from Yahoo! Finance (1m/5m/15m only). Otherwise, uses simulation.")
 
 resolve_open_trades(use_live=live_mode and YF_OK)
 if 'trade_history' not in st.session_state:
@@ -183,9 +207,9 @@ with st.sidebar:
     timeframe = st.selectbox("Signal Timeframe", list(SUPPORTED_TIMEFRAMES.keys()), index=0)
     pairs = st.multiselect("Pairs to Scan", PAIRS, default=PAIRS)
     max_signals = st.slider("Max signals per batch", 1, 10, 8)
-    if st.button("Scan for High-Quality Signals", use_container_width=True):
+    if st.button("Scan for Pro-Quality Signals", use_container_width=True):
         signals = []
-        strat_objs = [MovingAverageCrossover(), RSIStrategy()]
+        strat_objs = [ProSignalStrategy()]
         fetcher = LiveDataFetcher()
         for pair in pairs:
             df = fetcher.get_live_forex_data(pair, SUPPORTED_TIMEFRAMES[timeframe], live=live_mode and YF_OK)
@@ -200,8 +224,8 @@ with st.sidebar:
                 expiry_time = (datetime.now() + timedelta(minutes=minutes)).strftime('%Y-%m-%d %H:%M:%S')
                 log_obj = {**s, "entry_price": entry_price, "expiry_time": expiry_time}
                 TradeLogger().log_signal(log_obj)
-            st.toast(f"Logged {min(len(signals), max_signals)} signals!", icon="🎯")
-        else: st.toast("No high-confidence setups detected.",icon="🔍")
+            st.toast(f"Logged {min(len(signals), max_signals)} high-quality signals!", icon="🎯")
+        else: st.toast("No pro-level setups detected.",icon="🔍")
         refresh_data()
         st.rerun()
 
@@ -250,3 +274,15 @@ with col2:
 st.sidebar.header("📥 Export")
 export = df_trades.to_csv(index=False).encode()
 st.sidebar.download_button("Download CSV",export,"trade_history.csv","text/csv",use_container_width=True)
+
+with st.expander("💡 Pro Mentor Tip"):
+    pro_tips = [
+        "Wait for true alignment—sometimes no trade is the best trade.",
+        "Only act when multiple signals confirm a clear edge.",
+        "Big money leaves footprints; be patient, follow structure.",
+        "Risk management and discipline are your real edge.",
+        "Avoid trading in the middle—focus on supply and demand extremes.",
+        "Let high-confidence trades come to you, not the other way around."
+    ]
+    if st.button("Show Mentor Tip"):
+        st.info(random.choice(pro_tips))
