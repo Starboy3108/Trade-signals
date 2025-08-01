@@ -12,12 +12,18 @@ import json
 from dataclasses import dataclass
 from collections import defaultdict
 
-#### PARAMETERS ####
+# === Optionally enable yfinance: uncomment this and add 'yfinance' to requirements.txt ===
+try:
+    import yfinance as yf
+    YF_OK = True
+except Exception:
+    YF_OK = False
+
 TRADE_HISTORY_PATH = '/tmp/trade_history.csv'
 WEIGHTS_PATH = '/tmp/strategy_weights.json'
 EVOLUTION_LOG_PATH = '/tmp/algorithm_evolution_log.md'
-SUPPORTED_TIMEFRAMES = {"1 Min": 1, "3 Min": 3, "5 Min": 5}
-PAIRS = ["EUR/USD", "GBP/USD", "USD/JPY"]
+SUPPORTED_TIMEFRAMES = {"1 Min": 1, "3 Min": 3, "5 Min": 5, "15 Min": 15}
+PAIRS = ["EURUSD=X", "GBPUSD=X", "USDJPY=X"]  # yfinance forex ticker codes
 
 def ensure_file_exists(path, template=None):
     if not os.path.exists(path):
@@ -39,25 +45,19 @@ ensure_file_exists(EVOLUTION_LOG_PATH, [{}])
 @dataclass
 class SignalFeedback:
     trade_id: str
-    outcome: str  # 'win' or 'loss'
-    rating: str   # 'accepted' or 'rejected'
+    outcome: str
+    rating: str
     user_comment: str = ""
 
 class TradeLogger:
-    def __init__(self, path=TRADE_HISTORY_PATH): self.path=path
+    def __init__(self, path=TRADE_HISTORY_PATH): self.path = path
     def log_signal(self, signal):
         trade_id = f"{signal['timestamp']}_{signal['pair']}_{signal['timeframe']}"
-        entry = {**signal, "trade_id": trade_id, "outcome":"pending", "rating":"pending", "user_comment":"", "expiry_time": signal["expiry_time"], "entry_price": signal["entry_price"], "exit_price": ""}
+        entry = {**signal, "trade_id": trade_id, "outcome":"pending", "rating":"pending", "user_comment":"", "expiry_time": signal.get("expiry_time"), "entry_price": signal.get("entry_price"), "exit_price": ""}
         try: df = pd.read_csv(self.path)
         except: df = pd.DataFrame()
         df = pd.concat([df, pd.DataFrame([entry])], ignore_index=True)
         df.to_csv(self.path, index=False)
-    def add_feedback(self, feedback: SignalFeedback):
-        df = pd.read_csv(self.path)
-        idx = df[df['trade_id']==feedback.trade_id].index
-        if not idx.empty:
-            df.loc[idx[0], ['outcome','rating','user_comment']] = [feedback.outcome, feedback.rating, feedback.user_comment]
-            df.to_csv(self.path, index=False)
     def update_trade_result(self, trade_id, exit_price, outcome):
         df = pd.read_csv(self.path)
         idx = df[df['trade_id'] == trade_id].index
@@ -67,7 +67,7 @@ class TradeLogger:
             df.at[idx[0], "rating"] = "auto"
             df.to_csv(self.path, index=False)
 
-### STRATEGY STUBS
+# --- Strategies ---
 class BaseStrategy:
     @property
     def name(self): raise NotImplementedError
@@ -122,26 +122,35 @@ class SignalGenerator:
             return [{"timestamp":datetime.now().strftime('%Y-%m-%d %H:%M:%S'),"pair":pair,"signal":"sell","confidence":confidence,"reasoning":', '.join(active), "timeframe":timeframe}]
         else: return []
 
-### SMART SIMULATED DATA/RESULTS
+# --- Simulated price and auto-resolution (fallback for API) ---
 def price_simulation(last, tf_min):
-    """Simulate typical movement: drift + some noise, with sharper moves for longer TF."""
     drift = random.uniform(-0.001, 0.001)*tf_min
     shock = random.gauss(0, 0.002)*tf_min
     return round(last + drift + shock, 5)
 
 class LiveDataFetcher:
-    def get_live_forex_data(self, pair, n_points=100):
+    def get_live_forex_data(self, pair, tfmin, live=False):
+        # Live data: yfinance
+        if live and YF_OK:
+            try:
+                interval = f"{tfmin}m"
+                k = yf.download(tickers=pair, period="2d", interval=interval, progress=False)
+                if not k.empty:
+                    df = k.rename(columns={'Open':'open','High':'high','Low':'low','Close':'close'})
+                    return df.reset_index(drop=True)
+            except Exception as e:
+                st.warning(f"API error: {e}; using simulation.", icon="⚠️")
+        # Simulate
         base = 1.2 + random.uniform(-0.05,0.05)
-        increments = np.cumsum(np.random.normal(0, 0.002, n_points))
+        increments = np.cumsum(np.random.normal(0, 0.002, 100))
         close = [round(base + float(inc),5) for inc in increments]
         data = pd.DataFrame({"close": close})
-        data['open'] = data['close'] + np.random.normal(0,0.001,n_points)
-        data['high'] = data[['open','close']].max(axis=1) + abs(np.random.normal(0,0.001,n_points))
-        data['low']  = data[['open','close']].min(axis=1) - abs(np.random.normal(0,0.001,n_points))
-        data.index = pd.date_range(end=datetime.now(), periods=n_points, freq='1min')
+        data['open'] = data['close'] + np.random.normal(0,0.001,100)
+        data['high'] = data[['open','close']].max(axis=1) + abs(np.random.normal(0,0.001,100))
+        data['low']  = data[['open','close']].min(axis=1) - abs(np.random.normal(0,0.001,100))
+        data.index = pd.date_range(end=datetime.now(), periods=100, freq='1min')
         return data
 
-#### ANALYTICS ####
 class AnalyticsEngine:
     def __init__(self, log_path=TRADE_HISTORY_PATH): self.log_path = log_path
     def get_summary(self):
@@ -153,41 +162,44 @@ class AnalyticsEngine:
         total = len(completed)
         return {"win_rate":f"{(wins/total)*100:.2f}%","total":total}
 
-### AUTO-RESOLVE PENDING TRADES BASED ON SIMULATED OUTCOME
-def resolve_open_trades():
+def resolve_open_trades(use_live=False):
     df = pd.read_csv(TRADE_HISTORY_PATH)
     now = datetime.now()
     updated = False
     for idx,row in df[df['outcome']=='pending'].iterrows():
-        expiry = datetime.strptime(str(row["expiry_time"]), "%Y-%m-%d %H:%M:%S")
+        expiry = pd.to_datetime(row["expiry_time"])
         if now >= expiry:
-            # Simulate price action over tf
-            tf = int(row["timeframe"].replace("m",""))
+            tf = int(row["timeframe"].replace("m","").replace("Min",""))
             entry = float(row["entry_price"])
-            exit_price = price_simulation(entry, tf)
-            direction = row["signal"]
-            # define winning logic (for demo: up is win for buy, down is win for sell)
-            if direction == "buy":
-                outcome = "win" if exit_price > entry else "loss"
+            if use_live and YF_OK:
+                fetcher = LiveDataFetcher()
+                ticks = fetcher.get_live_forex_data(row['pair'], tf, live=True)
+                exit_price = float(ticks['close'].iloc[-1]) if ticks is not None and not ticks.empty else price_simulation(entry, tf)
             else:
-                outcome = "win" if exit_price < entry else "loss"
+                exit_price = price_simulation(entry, tf)
+            direction = row["signal"]
+            outcome = "win" if (exit_price > entry if direction == "buy" else exit_price < entry) else "loss"
             df.at[idx, "exit_price"] = exit_price
             df.at[idx, "outcome"] = outcome
             df.at[idx, "rating"] = "auto"
             updated = True
     if updated:
         df.to_csv(TRADE_HISTORY_PATH, index=False)
-        st.toast("Pending trades have been auto-graded.", icon="⏰")
+        st.toast("Pending trades auto-graded.", icon="⏰")
 
-### STREAMLIT UI ####
-resolve_open_trades()
-if 'trade_history' not in st.session_state:
-    st.session_state.trade_history = pd.read_csv(TRADE_HISTORY_PATH)
-def refresh_data():
-    st.session_state.trade_history = pd.read_csv(TRADE_HISTORY_PATH)
+# ------------ STREAMLIT UI ------------
 
 st.set_page_config(page_title="IQ Trading Assistant", layout="wide", page_icon="💡")
-st.title("🤖 High-IQ, Self-Learning Trading Assistant")
+st.title("🤖 High-IQ, API-Powered Trading Assistant")
+
+live_mode = st.sidebar.toggle("Live Data (yfinance)", False, help="Use real candles from Yahoo! Finance (1m/5m/15m). Otherwise, run smooth and fast with simulation.")
+
+resolve_open_trades(use_live=live_mode and YF_OK)
+if 'trade_history' not in st.session_state:
+    st.session_state.trade_history = pd.read_csv(TRADE_HISTORY_PATH)
+
+def refresh_data():
+    st.session_state.trade_history = pd.read_csv(TRADE_HISTORY_PATH)
 
 with st.sidebar:
     st.header("⚙️ Controls")
@@ -196,27 +208,23 @@ with st.sidebar:
     max_signals = st.slider("Max signals per batch", 1, 10, 8)
     if st.button("Scan for High-Quality Signals", use_container_width=True):
         signals = []
-        st.spinner("Smart-scanning assets...")
         strat_objs = [MovingAverageCrossover(), RSIStrategy()]
         fetcher = LiveDataFetcher()
         for pair in pairs:
-            df = fetcher.get_live_forex_data(pair)
+            df = fetcher.get_live_forex_data(pair, SUPPORTED_TIMEFRAMES[timeframe], live=live_mode and YF_OK)
             found = SignalGenerator(strat_objs).run(df, pair, timeframe=f'{SUPPORTED_TIMEFRAMES[timeframe]}m')
             if found: signals.extend(found)
             if len(signals) >= max_signals: break
         if signals:
             for s in signals[:max_signals]:
-                entry_price = float(fetcher.get_live_forex_data(s['pair']).close.iloc[-1])
+                df_price = fetcher.get_live_forex_data(s['pair'], SUPPORTED_TIMEFRAMES[timeframe], live=live_mode and YF_OK)
+                entry_price = float(df_price['close'].iloc[-1])
                 minutes = SUPPORTED_TIMEFRAMES[timeframe]
                 expiry_time = (datetime.now() + timedelta(minutes=minutes)).strftime('%Y-%m-%d %H:%M:%S')
-                log_obj = {**s,
-                    "entry_price": entry_price,
-                    "expiry_time": expiry_time
-                }
+                log_obj = {**s, "entry_price": entry_price, "expiry_time": expiry_time}
                 TradeLogger().log_signal(log_obj)
             st.toast(f"Logged {min(len(signals), max_signals)} signals!", icon="🎯")
-        else:
-            st.toast("No high-confidence setups detected.",icon="🔍")
+        else: st.toast("No high-confidence setups detected.",icon="🔍")
         refresh_data()
         st.rerun()
 
@@ -249,7 +257,6 @@ with col2:
             if submit:
                 feedback = SignalFeedback(trade_id, outcome, rating, comment)
                 TradeLogger().add_feedback(feedback)
-                SelfLearningAgent().update_weights()
                 st.success("AI updated from feedback!")
                 time.sleep(1)
                 refresh_data()
