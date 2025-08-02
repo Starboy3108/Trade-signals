@@ -53,9 +53,9 @@ class TradeLogger:
         df = pd.read_csv(self.path)
         idx = df[df['trade_id'] == trade_id].index
         if not idx.empty:
-            df.at[idx[0], "exit_price"] = exit_price
-            df.at[idx[0], "outcome"] = outcome
-            df.at[idx[0], "rating"] = "auto"
+            df.at[idx, "exit_price"] = exit_price
+            df.at[idx, "outcome"] = outcome
+            df.at[idx, "rating"] = "auto"
             df.to_csv(self.path, index=False)
 
 class ProSignalStrategy:
@@ -65,7 +65,8 @@ class ProSignalStrategy:
     def name(self): return self._name
     def generate_signals(self, data):
         data = data.copy()
-        if data.empty or len(data) < 46:  # enough candles for all rolling windows!
+        # Defensive: not enough bars, can't compute signals
+        if data.empty or len(data) < 50:
             data['signal'] = 'hold'
             return data
 
@@ -77,27 +78,28 @@ class ProSignalStrategy:
         rs = gain / (loss.replace(0, 1e-6))
         data['rsi'] = 100 - (100 / (1 + rs))
         data['atr'] = (data['high']-data['low']).rolling(10).mean()
-        # Manual supply/demand zone computation, all masks 1D, filled, boolean
         lows = data['low'].rolling(20).min()
         highs = data['high'].rolling(20).max()
-        demand = (data['close'] <= lows.shift(1)).fillna(False).astype(bool)
-        supply = (data['close'] >= highs.shift(1)).fillna(False).astype(bool)
-        # Prepare indicator masks, always boolean, always filled
+        demand = (data['close'] <= lows.shift(1)).fillna(False)
+        supply = (data['close'] >= highs.shift(1)).fillna(False)
+
+        # Guaranteed-aligned boolean masks: index, dtype, NA-safe
         buy_mask = (
-            (data['short_ma'] > data['long_ma']).fillna(False) &
-            (data['rsi'] < 35).fillna(False) &
+            (data['short_ma'] > data['long_ma']) &
+            (data['rsi'] < 35) &
             demand &
-            (data['atr'] > data['atr'].rolling(30).mean()).fillna(False)
-        ).astype(bool)
+            (data['atr'] > data['atr'].rolling(30).mean())
+        ).fillna(False).astype(bool)
         sell_mask = (
-            (data['short_ma'] < data['long_ma']).fillna(False) &
-            (data['rsi'] > 65).fillna(False) &
+            (data['short_ma'] < data['long_ma']) &
+            (data['rsi'] > 65) &
             supply &
-            (data['atr'] > data['atr'].rolling(30).mean()).fillna(False)
-        ).astype(bool)
+            (data['atr'] > data['atr'].rolling(30).mean())
+        ).fillna(False).astype(bool)
+
         data['signal'] = 'hold'
-        data.loc[data.index[buy_mask], 'signal'] = 'buy'
-        data.loc[data.index[sell_mask], 'signal'] = 'sell'
+        data.loc[buy_mask, 'signal'] = 'buy'
+        data.loc[sell_mask, 'signal'] = 'sell'
         return data
 
 class SignalGenerator:
