@@ -42,7 +42,9 @@ class TradeLogger:
     def __init__(self, path=TRADE_HISTORY_PATH): self.path = path
     def log_signal(self, signal):
         trade_id = f"{signal['timestamp']}_{signal['pair']}_{signal['timeframe']}"
-        entry = {**signal, "trade_id": trade_id, "outcome":"pending", "rating":"pending", "user_comment":"", "expiry_time": signal.get("expiry_time"), "entry_price": signal.get("entry_price"), "exit_price": ""}
+        entry = {**signal, "trade_id": trade_id, "outcome":"pending", "rating":"pending",
+                 "user_comment":"", "expiry_time": signal.get("expiry_time"),
+                 "entry_price": signal.get("entry_price"), "exit_price": ""}
         try: df = pd.read_csv(self.path)
         except: df = pd.DataFrame()
         df = pd.concat([df, pd.DataFrame([entry])], ignore_index=True)
@@ -59,8 +61,11 @@ class TradeLogger:
 def detect_supply_demand_zones(data, window=20):
     lows = data['low'].rolling(window).min()
     highs = data['high'].rolling(window).max()
-    demand = (data['close'] <= lows.shift(1)).astype(bool)
-    supply = (data['close'] >= highs.shift(1)).astype(bool)
+    demand = (data['close'] <= lows.shift(1))
+    supply = (data['close'] >= highs.shift(1))
+    # FULLY ALIGN with current data index and fill missing entries as False
+    demand = pd.Series(demand, index=data.index).fillna(False)
+    supply = pd.Series(supply, index=data.index).fillna(False)
     return demand, supply
 
 class ProSignalStrategy:
@@ -82,21 +87,18 @@ class ProSignalStrategy:
         data['rsi'] = 100 - (100 / (1 + rs))
         data['atr'] = (data['high']-data['low']).rolling(10).mean()
         demand, supply = detect_supply_demand_zones(data)
-        # MASK FIX: Always use Series aligned to DataFrame!
         buy_conf = (
             (data['short_ma'] > data['long_ma']) &
             (data['rsi'] < 35) &
-            (demand.values if hasattr(demand, "values") else demand) &
+            (demand) &
             (data['atr'] > data['atr'].rolling(30).mean())
-        )
-        buy_conf = pd.Series(buy_conf, index=data.index).fillna(False)
+        ).fillna(False)
         sell_conf = (
             (data['short_ma'] < data['long_ma']) &
             (data['rsi'] > 65) &
-            (supply.values if hasattr(supply, "values") else supply) &
+            (supply) &
             (data['atr'] > data['atr'].rolling(30).mean())
-        )
-        sell_conf = pd.Series(sell_conf, index=data.index).fillna(False)
+        ).fillna(False)
         data['signal'] = 'hold'
         data.loc[buy_conf, 'signal'] = 'buy'
         data.loc[sell_conf, 'signal'] = 'sell'
@@ -115,9 +117,11 @@ class SignalGenerator:
                 sig = s_data.loc[idx, 'signal']
                 if sig != 'hold':
                     active.append(strat.name)
+                    atr_now = s_data['atr'].iloc[-1]
+                    atr_mean = s_data['atr'].rolling(30).mean().iloc[-1]
                     conf = min(1.0, abs(
-                        float(s_data['atr'].iloc[-1]) / (float(s_data['atr'].rolling(30).mean().iloc[-1]) + 1e-6)
-                    )) if not pd.isnull(s_data['atr'].iloc[-1]) and not pd.isnull(s_data['atr'].rolling(30).mean().iloc[-1]) else 0.0
+                        float(atr_now) / (float(atr_mean) + 1e-6)
+                    )) if not pd.isnull(atr_now) and not pd.isnull(atr_mean) else 0.0
                     if conf > best_conf:
                         best_conf = conf
                         best_signal = sig
@@ -240,7 +244,9 @@ if df_trades.empty:
 else:
     df_show = df_trades.copy()
     df_show['expiry_time'] = pd.to_datetime(df_show['expiry_time'], errors='coerce').dt.strftime('%d-%b %H:%M:%S')
-    st.dataframe(df_show.sort_values('timestamp',ascending=False)[["timestamp","pair","signal","confidence","timeframe","entry_price","expiry_time","exit_price","outcome","reasoning"]],hide_index=True,use_container_width=True)
+    st.dataframe(df_show.sort_values('timestamp',ascending=False)[[
+        "timestamp","pair","signal","confidence","timeframe","entry_price","expiry_time","exit_price","outcome","reasoning"
+        ]],hide_index=True,use_container_width=True)
 
 col1,col2 = st.columns(2)
 with col1:
