@@ -59,13 +59,10 @@ class TradeLogger:
             df.to_csv(self.path, index=False)
 
 def detect_supply_demand_zones(data, window=20):
-    lows = data['low'].rolling(window).min()
-    highs = data['high'].rolling(window).max()
-    demand = (data['close'] <= lows.shift(1))
-    supply = (data['close'] >= highs.shift(1))
-    # FULLY ALIGN with current data index and fill missing entries as False
-    demand = pd.Series(demand, index=data.index).fillna(False)
-    supply = pd.Series(supply, index=data.index).fillna(False)
+    lows = pd.Series(data['low'].rolling(window).min().values, index=data.index)
+    highs = pd.Series(data['high'].rolling(window).max().values, index=data.index)
+    demand = (data['close'] <= lows.shift(1)).fillna(False)
+    supply = (data['close'] >= highs.shift(1)).fillna(False)
     return demand, supply
 
 class ProSignalStrategy:
@@ -125,7 +122,7 @@ class SignalGenerator:
                     if conf > best_conf:
                         best_conf = conf
                         best_signal = sig
-        confidence = round(best_conf,3)
+        confidence = round(best_conf, 3)
         if best_signal and confidence > 0.7:
             return [{
                 "timestamp":datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -155,9 +152,9 @@ class LiveDataFetcher:
                 st.warning(f"API error: {e}; using simulation.", icon="⚠️")
         base = 1.2 + random.uniform(-0.05,0.05)
         increments = np.cumsum(np.random.normal(0, 0.002, 100))
-        close = [round(base + float(inc),5) for inc in increments]
+        close = [round(base + float(inc), 5) for inc in increments]
         data = pd.DataFrame({"close": close})
-        data['open'] = data['close'] + np.random.normal(0,0.001,100)
+        data['open'] = data['close'] + np.random.normal(0, 0.001, 100)
         data['high'] = data[['open','close']].max(axis=1) + abs(np.random.normal(0,0.001,100))
         data['low']  = data[['open','close']].min(axis=1) - abs(np.random.normal(0,0.001,100))
         data.index = pd.date_range(end=datetime.now(), periods=100, freq='1min')
@@ -248,7 +245,7 @@ else:
         "timestamp","pair","signal","confidence","timeframe","entry_price","expiry_time","exit_price","outcome","reasoning"
         ]],hide_index=True,use_container_width=True)
 
-col1,col2 = st.columns(2)
+col1, col2 = st.columns(2)
 with col1:
     st.subheader("📈 Analytics")
     summary = {"win_rate":"N/A","total":0}
