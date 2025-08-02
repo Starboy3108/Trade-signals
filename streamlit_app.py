@@ -58,14 +58,6 @@ class TradeLogger:
             df.at[idx[0], "rating"] = "auto"
             df.to_csv(self.path, index=False)
 
-# FINAL, ROBUST supply/demand mask calculation—NO shape or dtype bugs!
-def detect_supply_demand_zones(data, window=20):
-    lows = data['low'].rolling(window).min()
-    highs = data['high'].rolling(window).max()
-    demand = (data['close'] <= lows.shift(1)).fillna(False).astype(bool)
-    supply = (data['close'] >= highs.shift(1)).fillna(False).astype(bool)
-    return demand, supply
-
 class ProSignalStrategy:
     def __init__(self):
         self._name = "MA, RSI, S/D, Volatility Multi-confirm"
@@ -73,35 +65,39 @@ class ProSignalStrategy:
     def name(self): return self._name
     def generate_signals(self, data):
         data = data.copy()
-        if data.empty or len(data) < 46:          # indicators need at least 46 candles!
+        if data.empty or len(data) < 46:  # enough candles for all rolling windows!
             data['signal'] = 'hold'
             return data
+
         data['short_ma'] = data['close'].rolling(14).mean()
         data['long_ma'] = data['close'].rolling(45).mean()
         delta = data['close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+        gain = delta.where(delta > 0, 0).rolling(14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
         rs = gain / (loss.replace(0, 1e-6))
         data['rsi'] = 100 - (100 / (1 + rs))
         data['atr'] = (data['high']-data['low']).rolling(10).mean()
-        demand, supply = detect_supply_demand_zones(data)
-        buy_conf = (
+        # Manual supply/demand zone computation, all masks 1D, filled, boolean
+        lows = data['low'].rolling(20).min()
+        highs = data['high'].rolling(20).max()
+        demand = (data['close'] <= lows.shift(1)).fillna(False).astype(bool)
+        supply = (data['close'] >= highs.shift(1)).fillna(False).astype(bool)
+        # Prepare indicator masks, always boolean, always filled
+        buy_mask = (
             (data['short_ma'] > data['long_ma']).fillna(False) &
             (data['rsi'] < 35).fillna(False) &
             demand &
             (data['atr'] > data['atr'].rolling(30).mean()).fillna(False)
-        )
-        buy_conf = buy_conf.fillna(False).astype(bool)     # <--- bugproof mask!
-        sell_conf = (
+        ).astype(bool)
+        sell_mask = (
             (data['short_ma'] < data['long_ma']).fillna(False) &
             (data['rsi'] > 65).fillna(False) &
             supply &
             (data['atr'] > data['atr'].rolling(30).mean()).fillna(False)
-        )
-        sell_conf = sell_conf.fillna(False).astype(bool)
+        ).astype(bool)
         data['signal'] = 'hold'
-        data.loc[buy_conf, 'signal'] = 'buy'
-        data.loc[sell_conf, 'signal'] = 'sell'
+        data.loc[data.index[buy_mask], 'signal'] = 'buy'
+        data.loc[data.index[sell_mask], 'signal'] = 'sell'
         return data
 
 class SignalGenerator:
@@ -185,7 +181,7 @@ def resolve_open_trades(use_live=False):
             if use_live and YF_OK:
                 fetcher = LiveDataFetcher()
                 ticks = fetcher.get_live_forex_data(row['pair'], tf, live=True)
-                exit_price = float(ticks['close'].iloc[-1]) if ticks is not None and not ticks.empty else price_simulation(entry, tf)
+                exit_price = float(ticks['close'].iloc[-1]) if (ticks is not None and not ticks.empty) else price_simulation(entry, tf)
             else:
                 exit_price = price_simulation(entry, tf)
             direction = row.get("signal", "buy")
