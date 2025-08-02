@@ -58,9 +58,10 @@ class TradeLogger:
             df.at[idx[0], "rating"] = "auto"
             df.to_csv(self.path, index=False)
 
+# FIXED: supply/demand mask always 1D Series, safe for any pandas!
 def detect_supply_demand_zones(data, window=20):
-    lows = pd.Series(data['low'].rolling(window).min().values, index=data.index)
-    highs = pd.Series(data['high'].rolling(window).max().values, index=data.index)
+    lows = data['low'].rolling(window).min()
+    highs = data['high'].rolling(window).max()
     demand = (data['close'] <= lows.shift(1)).fillna(False)
     supply = (data['close'] >= highs.shift(1)).fillna(False)
     return demand, supply
@@ -87,13 +88,13 @@ class ProSignalStrategy:
         buy_conf = (
             (data['short_ma'] > data['long_ma']) &
             (data['rsi'] < 35) &
-            (demand) &
+            demand &
             (data['atr'] > data['atr'].rolling(30).mean())
         ).fillna(False)
         sell_conf = (
             (data['short_ma'] < data['long_ma']) &
             (data['rsi'] > 65) &
-            (supply) &
+            supply &
             (data['atr'] > data['atr'].rolling(30).mean())
         ).fillna(False)
         data['signal'] = 'hold'
