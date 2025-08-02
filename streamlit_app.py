@@ -58,14 +58,13 @@ class TradeLogger:
             df.at[idx[0], "rating"] = "auto"
             df.to_csv(self.path, index=False)
 
-# ************ THE ONLY WORKING, ROBUST VERSION! ************
+# FINAL, ROBUST supply/demand mask calculation—NO shape or dtype bugs!
 def detect_supply_demand_zones(data, window=20):
     lows = data['low'].rolling(window).min()
     highs = data['high'].rolling(window).max()
-    demand = (data['close'] <= lows.shift(1)).fillna(False)
-    supply = (data['close'] >= highs.shift(1)).fillna(False)
+    demand = (data['close'] <= lows.shift(1)).fillna(False).astype(bool)
+    supply = (data['close'] >= highs.shift(1)).fillna(False).astype(bool)
     return demand, supply
-# ************************************************************
 
 class ProSignalStrategy:
     def __init__(self):
@@ -74,7 +73,7 @@ class ProSignalStrategy:
     def name(self): return self._name
     def generate_signals(self, data):
         data = data.copy()
-        if data.empty:
+        if data.empty or len(data) < 46:          # indicators need at least 46 candles!
             data['signal'] = 'hold'
             return data
         data['short_ma'] = data['close'].rolling(14).mean()
@@ -87,17 +86,19 @@ class ProSignalStrategy:
         data['atr'] = (data['high']-data['low']).rolling(10).mean()
         demand, supply = detect_supply_demand_zones(data)
         buy_conf = (
-            (data['short_ma'] > data['long_ma']) &
-            (data['rsi'] < 35) &
+            (data['short_ma'] > data['long_ma']).fillna(False) &
+            (data['rsi'] < 35).fillna(False) &
             demand &
-            (data['atr'] > data['atr'].rolling(30).mean())
-        ).fillna(False)
+            (data['atr'] > data['atr'].rolling(30).mean()).fillna(False)
+        )
+        buy_conf = buy_conf.fillna(False).astype(bool)     # <--- bugproof mask!
         sell_conf = (
-            (data['short_ma'] < data['long_ma']) &
-            (data['rsi'] > 65) &
+            (data['short_ma'] < data['long_ma']).fillna(False) &
+            (data['rsi'] > 65).fillna(False) &
             supply &
-            (data['atr'] > data['atr'].rolling(30).mean())
-        ).fillna(False)
+            (data['atr'] > data['atr'].rolling(30).mean()).fillna(False)
+        )
+        sell_conf = sell_conf.fillna(False).astype(bool)
         data['signal'] = 'hold'
         data.loc[buy_conf, 'signal'] = 'buy'
         data.loc[sell_conf, 'signal'] = 'sell'
