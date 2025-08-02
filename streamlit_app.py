@@ -80,30 +80,36 @@ class ProSignalStrategy:
         data['atr'] = (data['high']-data['low']).rolling(10).mean()
         lows = data['low'].rolling(20).min()
         highs = data['high'].rolling(20).max()
-        demand = (data['close'] <= lows.shift(1))
-        supply = (data['close'] >= highs.shift(1))
+        demand = (data['close'] <= lows.shift(1)).fillna(False)
+        supply = (data['close'] >= highs.shift(1)).fillna(False)
 
         # Initialize signal column
         data['signal'] = 'hold'
         
-        # BULLETPROOF METHOD: Use np.where instead of .loc[mask]
-        buy_condition = (
-            (data['short_ma'] > data['long_ma']) &
-            (data['rsi'] < 35) &
-            demand &
-            (data['atr'] > data['atr'].rolling(30).mean())
-        ).fillna(False)
-        
-        sell_condition = (
-            (data['short_ma'] < data['long_ma']) &
-            (data['rsi'] > 65) &
-            supply &
-            (data['atr'] > data['atr'].rolling(30).mean())
-        ).fillna(False)
-        
-        # Safe assignment using np.where - NO mask indexing issues
-        data['signal'] = np.where(buy_condition, 'buy', 
-                         np.where(sell_condition, 'sell', 'hold'))
+        # BULLETPROOF METHOD: Loop through rows and assign individually
+        for i in range(len(data)):
+            try:
+                # Check buy conditions
+                if (pd.notna(data['short_ma'].iloc[i]) and pd.notna(data['long_ma'].iloc[i]) and
+                    pd.notna(data['rsi'].iloc[i]) and pd.notna(data['atr'].iloc[i]) and
+                    data['short_ma'].iloc[i] > data['long_ma'].iloc[i] and
+                    data['rsi'].iloc[i] < 35 and
+                    demand.iloc[i] and
+                    pd.notna(data['atr'].rolling(30).mean().iloc[i]) and
+                    data['atr'].iloc[i] > data['atr'].rolling(30).mean().iloc[i]):
+                    data.iloc[i, data.columns.get_loc('signal')] = 'buy'
+                
+                # Check sell conditions
+                elif (pd.notna(data['short_ma'].iloc[i]) and pd.notna(data['long_ma'].iloc[i]) and
+                      pd.notna(data['rsi'].iloc[i]) and pd.notna(data['atr'].iloc[i]) and
+                      data['short_ma'].iloc[i] < data['long_ma'].iloc[i] and
+                      data['rsi'].iloc[i] > 65 and
+                      supply.iloc[i] and
+                      pd.notna(data['atr'].rolling(30).mean().iloc[i]) and
+                      data['atr'].iloc[i] > data['atr'].rolling(30).mean().iloc[i]):
+                    data.iloc[i, data.columns.get_loc('signal')] = 'sell'
+            except:
+                continue
         
         return data
 
