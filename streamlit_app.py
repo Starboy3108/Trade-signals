@@ -69,6 +69,7 @@ class ProSignalStrategy:
             data['signal'] = 'hold'
             return data
 
+        # Calculate indicators
         data['short_ma'] = data['close'].rolling(14).mean()
         data['long_ma'] = data['close'].rolling(45).mean()
         delta = data['close'].diff()
@@ -77,34 +78,33 @@ class ProSignalStrategy:
         rs = gain / (loss.replace(0, 1e-6))
         data['rsi'] = 100 - (100 / (1 + rs))
         data['atr'] = (data['high']-data['low']).rolling(10).mean()
-
         lows = data['low'].rolling(20).min()
         highs = data['high'].rolling(20).max()
         demand = (data['close'] <= lows.shift(1))
         supply = (data['close'] >= highs.shift(1))
 
-        buy_mask = pd.Series(
-            (
-                (data['short_ma'] > data['long_ma']) &
-                (data['rsi'] < 35) &
-                demand &
-                (data['atr'] > data['atr'].rolling(30).mean())
-            ).values,
-            index=data.index
-        ).fillna(False).astype(bool)
-        sell_mask = pd.Series(
-            (
-                (data['short_ma'] < data['long_ma']) &
-                (data['rsi'] > 65) &
-                supply &
-                (data['atr'] > data['atr'].rolling(30).mean())
-            ).values,
-            index=data.index
-        ).fillna(False).astype(bool)
-
+        # Initialize signal column
         data['signal'] = 'hold'
-        data.loc[buy_mask, 'signal'] = 'buy'
-        data.loc[sell_mask, 'signal'] = 'sell'
+        
+        # BULLETPROOF METHOD: Use np.where instead of .loc[mask]
+        buy_condition = (
+            (data['short_ma'] > data['long_ma']) &
+            (data['rsi'] < 35) &
+            demand &
+            (data['atr'] > data['atr'].rolling(30).mean())
+        ).fillna(False)
+        
+        sell_condition = (
+            (data['short_ma'] < data['long_ma']) &
+            (data['rsi'] > 65) &
+            supply &
+            (data['atr'] > data['atr'].rolling(30).mean())
+        ).fillna(False)
+        
+        # Safe assignment using np.where - NO mask indexing issues
+        data['signal'] = np.where(buy_condition, 'buy', 
+                         np.where(sell_condition, 'sell', 'hold'))
+        
         return data
 
 class SignalGenerator:
