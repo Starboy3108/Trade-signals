@@ -11,7 +11,6 @@ from datetime import datetime, timedelta
 import json
 from dataclasses import dataclass
 
-# Try to import yfinance for API candles
 try:
     import yfinance as yf
     YF_OK = True
@@ -60,8 +59,8 @@ class TradeLogger:
 def detect_supply_demand_zones(data, window=20):
     lows = data['low'].rolling(window).min()
     highs = data['high'].rolling(window).max()
-    demand = (data['close'] <= lows.shift(1)).fillna(False)
-    supply = (data['close'] >= highs.shift(1)).fillna(False)
+    demand = (data['close'] <= lows.shift(1)).astype(bool)
+    supply = (data['close'] >= highs.shift(1)).astype(bool)
     return demand, supply
 
 class ProSignalStrategy:
@@ -83,18 +82,21 @@ class ProSignalStrategy:
         data['rsi'] = 100 - (100 / (1 + rs))
         data['atr'] = (data['high']-data['low']).rolling(10).mean()
         demand, supply = detect_supply_demand_zones(data)
+        # MASK FIX: Always use Series aligned to DataFrame!
         buy_conf = (
             (data['short_ma'] > data['long_ma']) &
             (data['rsi'] < 35) &
-            (demand == True) &
+            (demand.values if hasattr(demand, "values") else demand) &
             (data['atr'] > data['atr'].rolling(30).mean())
-        ).fillna(False)
+        )
+        buy_conf = pd.Series(buy_conf, index=data.index).fillna(False)
         sell_conf = (
             (data['short_ma'] < data['long_ma']) &
             (data['rsi'] > 65) &
-            (supply == True) &
+            (supply.values if hasattr(supply, "values") else supply) &
             (data['atr'] > data['atr'].rolling(30).mean())
-        ).fillna(False)
+        )
+        sell_conf = pd.Series(sell_conf, index=data.index).fillna(False)
         data['signal'] = 'hold'
         data.loc[buy_conf, 'signal'] = 'buy'
         data.loc[sell_conf, 'signal'] = 'sell'
