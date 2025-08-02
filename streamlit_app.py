@@ -8,7 +8,6 @@ import numpy as np
 import random
 import time
 from datetime import datetime, timedelta
-import json
 from dataclasses import dataclass
 
 try:
@@ -65,8 +64,8 @@ class ProSignalStrategy:
     def name(self): return self._name
     def generate_signals(self, data):
         data = data.copy()
-        # Defensive: not enough bars, can't compute signals
-        if data.empty or len(data) < 50:
+        MIN_LEN = 50
+        if data.empty or len(data) < MIN_LEN:
             data['signal'] = 'hold'
             return data
 
@@ -78,23 +77,29 @@ class ProSignalStrategy:
         rs = gain / (loss.replace(0, 1e-6))
         data['rsi'] = 100 - (100 / (1 + rs))
         data['atr'] = (data['high']-data['low']).rolling(10).mean()
+
         lows = data['low'].rolling(20).min()
         highs = data['high'].rolling(20).max()
-        demand = (data['close'] <= lows.shift(1)).fillna(False)
-        supply = (data['close'] >= highs.shift(1)).fillna(False)
+        demand = (data['close'] <= lows.shift(1))
+        supply = (data['close'] >= highs.shift(1))
 
-        # Guaranteed-aligned boolean masks: index, dtype, NA-safe
-        buy_mask = (
-            (data['short_ma'] > data['long_ma']) &
-            (data['rsi'] < 35) &
-            demand &
-            (data['atr'] > data['atr'].rolling(30).mean())
+        buy_mask = pd.Series(
+            (
+                (data['short_ma'] > data['long_ma']) &
+                (data['rsi'] < 35) &
+                demand &
+                (data['atr'] > data['atr'].rolling(30).mean())
+            ).values,
+            index=data.index
         ).fillna(False).astype(bool)
-        sell_mask = (
-            (data['short_ma'] < data['long_ma']) &
-            (data['rsi'] > 65) &
-            supply &
-            (data['atr'] > data['atr'].rolling(30).mean())
+        sell_mask = pd.Series(
+            (
+                (data['short_ma'] < data['long_ma']) &
+                (data['rsi'] > 65) &
+                supply &
+                (data['atr'] > data['atr'].rolling(30).mean())
+            ).values,
+            index=data.index
         ).fillna(False).astype(bool)
 
         data['signal'] = 'hold'
