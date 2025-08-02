@@ -58,13 +58,14 @@ class TradeLogger:
             df.at[idx[0], "rating"] = "auto"
             df.to_csv(self.path, index=False)
 
-# FIXED: supply/demand mask always 1D Series, safe for any pandas!
+# ************ THE ONLY WORKING, ROBUST VERSION! ************
 def detect_supply_demand_zones(data, window=20):
     lows = data['low'].rolling(window).min()
     highs = data['high'].rolling(window).max()
     demand = (data['close'] <= lows.shift(1)).fillna(False)
     supply = (data['close'] >= highs.shift(1)).fillna(False)
     return demand, supply
+# ************************************************************
 
 class ProSignalStrategy:
     def __init__(self):
