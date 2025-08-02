@@ -83,32 +83,36 @@ class ProSignalStrategy:
         demand = (data['close'] <= lows.shift(1)).fillna(False)
         supply = (data['close'] >= highs.shift(1)).fillna(False)
 
-        # Initialize signal column
+        # Initialize signal column with default value
         data['signal'] = 'hold'
         
         # BULLETPROOF METHOD: Loop through rows and assign individually
         for i in range(len(data)):
             try:
+                # Get the current row values safely
+                short_ma = data['short_ma'].iloc[i]
+                long_ma = data['long_ma'].iloc[i]
+                rsi = data['rsi'].iloc[i]
+                atr_current = data['atr'].iloc[i]
+                demand_current = demand.iloc[i]
+                supply_current = supply.iloc[i]
+                atr_mean = data['atr'].iloc[:i+1].rolling(30).mean().iloc[i] if i >= 29 else np.nan
+                
                 # Check buy conditions
-                if (pd.notna(data['short_ma'].iloc[i]) and pd.notna(data['long_ma'].iloc[i]) and
-                    pd.notna(data['rsi'].iloc[i]) and pd.notna(data['atr'].iloc[i]) and
-                    data['short_ma'].iloc[i] > data['long_ma'].iloc[i] and
-                    data['rsi'].iloc[i] < 35 and
-                    demand.iloc[i] and
-                    pd.notna(data['atr'].rolling(30).mean().iloc[i]) and
-                    data['atr'].iloc[i] > data['atr'].rolling(30).mean().iloc[i]):
+                if (pd.notna(short_ma) and pd.notna(long_ma) and pd.notna(rsi) and 
+                    pd.notna(atr_current) and pd.notna(atr_mean) and
+                    short_ma > long_ma and rsi < 35 and demand_current and
+                    atr_current > atr_mean):
                     data.iloc[i, data.columns.get_loc('signal')] = 'buy'
                 
                 # Check sell conditions
-                elif (pd.notna(data['short_ma'].iloc[i]) and pd.notna(data['long_ma'].iloc[i]) and
-                      pd.notna(data['rsi'].iloc[i]) and pd.notna(data['atr'].iloc[i]) and
-                      data['short_ma'].iloc[i] < data['long_ma'].iloc[i] and
-                      data['rsi'].iloc[i] > 65 and
-                      supply.iloc[i] and
-                      pd.notna(data['atr'].rolling(30).mean().iloc[i]) and
-                      data['atr'].iloc[i] > data['atr'].rolling(30).mean().iloc[i]):
+                elif (pd.notna(short_ma) and pd.notna(long_ma) and pd.notna(rsi) and 
+                      pd.notna(atr_current) and pd.notna(atr_mean) and
+                      short_ma < long_ma and rsi > 65 and supply_current and
+                      atr_current > atr_mean):
                     data.iloc[i, data.columns.get_loc('signal')] = 'sell'
-            except:
+                    
+            except Exception:
                 continue
         
         return data
@@ -122,18 +126,21 @@ class SignalGenerator:
         for strat in self.strategies:
             s_data = strat.generate_signals(data.copy())
             if not s_data.empty and 'signal' in s_data.columns:
-                idx = s_data.index[-1]
-                sig = s_data.loc[idx, 'signal']
-                if sig != 'hold':
-                    active.append(strat.name)
-                    atr_now = s_data['atr'].iloc[-1]
-                    atr_mean = s_data['atr'].rolling(30).mean().iloc[-1]
-                    conf = min(1.0, abs(
-                        float(atr_now) / (float(atr_mean) + 1e-6)
-                    )) if not pd.isnull(atr_now) and not pd.isnull(atr_mean) else 0.0
-                    if conf > best_conf:
-                        best_conf = conf
-                        best_signal = sig
+                # Get the last signal value as a scalar
+                try:
+                    sig = str(s_data['signal'].iloc[-1])  # Convert to string to avoid Series issues
+                    if sig != 'hold':
+                        active.append(strat.name)
+                        atr_now = s_data['atr'].iloc[-1]
+                        atr_mean = s_data['atr'].rolling(30).mean().iloc[-1]
+                        conf = min(1.0, abs(
+                            float(atr_now) / (float(atr_mean) + 1e-6)
+                        )) if not pd.isnull(atr_now) and not pd.isnull(atr_mean) else 0.0
+                        if conf > best_conf:
+                            best_conf = conf
+                            best_signal = sig
+                except Exception:
+                    continue
         confidence = round(best_conf, 3)
         if best_signal and confidence > 0.7:
             return [{
@@ -156,7 +163,7 @@ class LiveDataFetcher:
     def get_live_forex_data(self, pair, tfmin, live=False):
         if live and YF_OK:
             try:
-                k = yf.download(tickers=pair, period="2d", interval=f"{tfmin}m", progress=False)
+                k = yf.download(tickers=pair, period="2d", interval=f"{tfmin}m", progress=False, auto_adjust=False)
                 if not k.empty:
                     df = k.rename(columns={'Open':'open','High':'high','Low':'low','Close':'close'})
                     return df.reset_index(drop=True)
@@ -173,39 +180,44 @@ class LiveDataFetcher:
         return data
 
 def resolve_open_trades(use_live=False):
-    df = pd.read_csv(TRADE_HISTORY_PATH)
-    now = datetime.now()
-    updated = False
-    for idx, row in df[df['outcome']=='pending'].iterrows():
-        try:
-            expiry_str = row.get("expiry_time", "")
-            if pd.isna(expiry_str) or not str(expiry_str).strip():
+    try:
+        df = pd.read_csv(TRADE_HISTORY_PATH)
+        if df.empty:
+            return
+        now = datetime.now()
+        updated = False
+        for idx, row in df[df['outcome']=='pending'].iterrows():
+            try:
+                expiry_str = row.get("expiry_time", "")
+                if pd.isna(expiry_str) or not str(expiry_str).strip():
+                    continue
+                expiry = pd.to_datetime(expiry_str, errors='coerce')
+                if pd.isna(expiry):
+                    continue
+            except Exception:
                 continue
-            expiry = pd.to_datetime(expiry_str, errors='coerce')
-            if pd.isna(expiry):
-                continue
-        except Exception:
-            continue
-        if now >= expiry:
-            tf = int(str(row.get("timeframe", "1")).replace("m", "").replace("Min", "").strip())
-            entry_str = row.get("entry_price", "0")
-            try: entry = float(entry_str or 0)
-            except: entry = 0
-            if use_live and YF_OK:
-                fetcher = LiveDataFetcher()
-                ticks = fetcher.get_live_forex_data(row['pair'], tf, live=True)
-                exit_price = float(ticks['close'].iloc[-1]) if (ticks is not None and not ticks.empty) else price_simulation(entry, tf)
-            else:
-                exit_price = price_simulation(entry, tf)
-            direction = row.get("signal", "buy")
-            outcome = "win" if (exit_price > entry if direction == "buy" else exit_price < entry) else "loss"
-            df.at[idx, "exit_price"] = exit_price
-            df.at[idx, "outcome"] = outcome
-            df.at[idx, "rating"] = "auto"
-            updated = True
-    if updated:
-        df.to_csv(TRADE_HISTORY_PATH, index=False)
-        st.toast("Pending trades auto-graded.", icon="⏰")
+            if now >= expiry:
+                tf = int(str(row.get("timeframe", "1")).replace("m", "").replace("Min", "").strip())
+                entry_str = row.get("entry_price", "0")
+                try: entry = float(entry_str or 0)
+                except: entry = 0
+                if use_live and YF_OK:
+                    fetcher = LiveDataFetcher()
+                    ticks = fetcher.get_live_forex_data(row['pair'], tf, live=True)
+                    exit_price = float(ticks['close'].iloc[-1]) if (ticks is not None and not ticks.empty) else price_simulation(entry, tf)
+                else:
+                    exit_price = price_simulation(entry, tf)
+                direction = row.get("signal", "buy")
+                outcome = "win" if (exit_price > entry if direction == "buy" else exit_price < entry) else "loss"
+                df.at[idx, "exit_price"] = exit_price
+                df.at[idx, "outcome"] = outcome
+                df.at[idx, "rating"] = "auto"
+                updated = True
+        if updated:
+            df.to_csv(TRADE_HISTORY_PATH, index=False)
+            st.toast("Pending trades auto-graded.", icon="⏰")
+    except Exception:
+        pass
 
 st.set_page_config(page_title="IQ Trading Assistant", layout="wide", page_icon="💡")
 st.title("🤖 Pro Pattern, API-Powered Trading Assistant")
@@ -229,18 +241,25 @@ with st.sidebar:
         strat_objs = [ProSignalStrategy()]
         fetcher = LiveDataFetcher()
         for pair in pairs:
-            df = fetcher.get_live_forex_data(pair, SUPPORTED_TIMEFRAMES[timeframe], live=live_mode and YF_OK)
-            found = SignalGenerator(strat_objs).run(df, pair, timeframe=f'{SUPPORTED_TIMEFRAMES[timeframe]}m')
-            if found: signals.extend(found)
-            if len(signals) >= max_signals: break
+            try:
+                df = fetcher.get_live_forex_data(pair, SUPPORTED_TIMEFRAMES[timeframe], live=live_mode and YF_OK)
+                found = SignalGenerator(strat_objs).run(df, pair, timeframe=f'{SUPPORTED_TIMEFRAMES[timeframe]}m')
+                if found: signals.extend(found)
+                if len(signals) >= max_signals: break
+            except Exception as e:
+                st.error(f"Error processing {pair}: {str(e)}")
+                continue
         if signals:
             for s in signals[:max_signals]:
-                df_price = fetcher.get_live_forex_data(s['pair'], SUPPORTED_TIMEFRAMES[timeframe], live=live_mode and YF_OK)
-                entry_price = float(df_price['close'].iloc[-1])
-                minutes = SUPPORTED_TIMEFRAMES[timeframe]
-                expiry_time = (datetime.now() + timedelta(minutes=minutes)).strftime('%Y-%m-%d %H:%M:%S')
-                log_obj = {**s, "entry_price": entry_price, "expiry_time": expiry_time}
-                TradeLogger().log_signal(log_obj)
+                try:
+                    df_price = fetcher.get_live_forex_data(s['pair'], SUPPORTED_TIMEFRAMES[timeframe], live=live_mode and YF_OK)
+                    entry_price = float(df_price['close'].iloc[-1])
+                    minutes = SUPPORTED_TIMEFRAMES[timeframe]
+                    expiry_time = (datetime.now() + timedelta(minutes=minutes)).strftime('%Y-%m-%d %H:%M:%S')
+                    log_obj = {**s, "entry_price": entry_price, "expiry_time": expiry_time}
+                    TradeLogger().log_signal(log_obj)
+                except Exception:
+                    continue
             st.toast(f"Logged {min(len(signals), max_signals)} high-quality signals!", icon="🎯")
         else: st.toast("No pro-level setups detected.",icon="🔍")
         refresh_data()
@@ -252,10 +271,13 @@ if df_trades.empty:
     st.info("No trades yet. Use the sidebar to scan for signals.")
 else:
     df_show = df_trades.copy()
-    df_show['expiry_time'] = pd.to_datetime(df_show['expiry_time'], errors='coerce').dt.strftime('%d-%b %H:%M:%S')
-    st.dataframe(df_show.sort_values('timestamp',ascending=False)[[
-        "timestamp","pair","signal","confidence","timeframe","entry_price","expiry_time","exit_price","outcome","reasoning"
-        ]],hide_index=True,use_container_width=True)
+    try:
+        df_show['expiry_time'] = pd.to_datetime(df_show['expiry_time'], errors='coerce').dt.strftime('%d-%b %H:%M:%S')
+        st.dataframe(df_show.sort_values('timestamp',ascending=False)[[
+            "timestamp","pair","signal","confidence","timeframe","entry_price","expiry_time","exit_price","outcome","reasoning"
+            ]],hide_index=True,use_container_width=True)
+    except Exception:
+        st.dataframe(df_trades, hide_index=True, use_container_width=True)
 
 col1, col2 = st.columns(2)
 with col1:
