@@ -10,7 +10,6 @@ import time
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 import json
-import requests
 from typing import Dict, List, Optional
 
 try:
@@ -454,4 +453,6 @@ class SelfLearningEngine:
             if recent_win_rate < 0.6:
                 current_weights['multi_timeframe_confirmation'] *= 1.1
                 current_weights['volatility_breakout'] *= 0.9
-                st.info("🧠 AI Learning: Increasing multi-timeframe confirmation weight due to re
+                st.info("🧠 AI Learning: Adjusting strategy weights based on recent performance")
+            
+  
