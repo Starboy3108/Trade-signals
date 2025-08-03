@@ -12,7 +12,6 @@ from dataclasses import dataclass
 import json
 import requests
 from typing import Dict, List, Optional
-import hashlib
 
 try:
     import yfinance as yf
@@ -149,10 +148,6 @@ class AdvancedSignalStrategy:
     
     def calculate_market_structure(self, data: pd.DataFrame) -> pd.Series:
         """Identify market structure: trending, ranging, breakout"""
-        # Higher highs and higher lows = uptrend
-        # Lower highs and lower lows = downtrend
-        # Sideways = ranging
-        
         highs = data['high'].rolling(20).max()
         lows = data['low'].rolling(20).min()
         
@@ -209,7 +204,6 @@ class AdvancedSignalStrategy:
     
     def multi_timeframe_confirmation(self, data: pd.DataFrame) -> Dict[str, float]:
         """Analyze multiple timeframes for confirmation"""
-        # Simulate higher timeframe by resampling
         try:
             # 5-min timeframe
             data_5m = data.resample('5min').agg({
@@ -458,4 +452,6 @@ class SelfLearningEngine:
             
             # If performance is poor, be more conservative
             if recent_win_rate < 0.6:
-                current_weigh
+                current_weights['multi_timeframe_confirmation'] *= 1.1
+                current_weights['volatility_breakout'] *= 0.9
+                st.info("🧠 AI Learning: Increasing multi-timeframe confirmation weight due to re
