@@ -9,6 +9,10 @@ import random
 import time
 from datetime import datetime, timedelta
 from dataclasses import dataclass
+import json
+import requests
+from typing import Dict, List, Optional
+import hashlib
 
 try:
     import yfinance as yf
@@ -16,28 +20,46 @@ try:
 except Exception:
     YF_OK = False
 
+# File paths
 TRADE_HISTORY_PATH = '/tmp/trade_history.csv'
+STRATEGY_WEIGHTS_PATH = '/tmp/strategy_weights.json'
+PERFORMANCE_LOG_PATH = '/tmp/performance_analysis.json'
+MARKET_CONDITIONS_PATH = '/tmp/market_conditions.json'
+
 SUPPORTED_TIMEFRAMES = {"1 Min": 1, "3 Min": 3, "5 Min": 5, "15 Min": 15}
 
-# Added OTC currencies that trade 24/7 including weekends
+# Enhanced OTC pairs with volatility characteristics
 PAIRS = [
-    # Major Forex (weekdays only)
-    "EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "USDCAD=X", "USDCHF=X",
-    # OTC Currencies (available 24/7 including weekends)
     "OTC_EURUSD", "OTC_GBPUSD", "OTC_USDJPY", "OTC_AUDUSD", "OTC_USDCAD", 
     "OTC_EURJPY", "OTC_GBPJPY", "OTC_EURGBP", "OTC_AUDCAD", "OTC_NZDUSD",
-    "OTC_XAUUSD", "OTC_XAGUSD", "OTC_BTCUSD", "OTC_ETHUSD"
+    "OTC_XAUUSD", "OTC_XAGUSD", "OTC_BTCUSD", "OTC_ETHUSD", "OTC_USDCHF"
 ]
 
-def ensure_file_exists(path):
+def ensure_file_exists(path, default_content=None):
     if not os.path.exists(path):
-        pd.DataFrame([{
-            "trade_id":"", "timestamp":"", "pair":"", "signal":"", "confidence":"", 
-            "reasoning":"", "outcome":"", "rating":"", "user_comment":"",
-            "timeframe":"", "entry_price":"", "expiry_time":"", "exit_price":""
-        }]).to_csv(path, index=False)
+        if path.endswith('.csv'):
+            pd.DataFrame(default_content if default_content else [{
+                "trade_id":"", "timestamp":"", "pair":"", "signal":"", "confidence":"", 
+                "reasoning":"", "outcome":"", "rating":"", "user_comment":"",
+                "timeframe":"", "entry_price":"", "expiry_time":"", "exit_price":"",
+                "market_condition":"", "volatility":"", "trend_strength":"", "news_impact":""
+            }]).to_csv(path, index=False)
+        elif path.endswith('.json'):
+            with open(path, 'w') as f:
+                json.dump(default_content if default_content else {}, f)
 
+# Initialize files
 ensure_file_exists(TRADE_HISTORY_PATH)
+ensure_file_exists(STRATEGY_WEIGHTS_PATH, {
+    "multi_timeframe_confirmation": 1.2,
+    "volume_price_analysis": 1.1,
+    "market_structure": 1.3,
+    "volatility_breakout": 1.0,
+    "news_sentiment": 0.9,
+    "fibonacci_levels": 1.1
+})
+ensure_file_exists(PERFORMANCE_LOG_PATH, {"daily_performance": {}, "strategy_performance": {}})
+ensure_file_exists(MARKET_CONDITIONS_PATH, {"current_trend": "neutral", "volatility_regime": "normal"})
 
 @dataclass
 class SignalFeedback:
@@ -46,346 +68,394 @@ class SignalFeedback:
     rating: str
     user_comment: str = ""
 
-class TradeLogger:
-    def __init__(self, path=TRADE_HISTORY_PATH): self.path = path
-    def log_signal(self, signal):
-        trade_id = f"{signal['timestamp']}_{signal['pair']}_{signal['timeframe']}"
-        entry = {**signal, "trade_id": trade_id, "outcome":"pending", "rating":"pending",
-                 "user_comment":"", "expiry_time": signal.get("expiry_time"),
-                 "entry_price": signal.get("entry_price"), "exit_price": ""}
-        try: df = pd.read_csv(self.path)
-        except: df = pd.DataFrame()
-        df = pd.concat([df, pd.DataFrame([entry])], ignore_index=True)
-        df.to_csv(self.path, index=False)
-    def update_trade_result(self, trade_id, exit_price, outcome):
-        df = pd.read_csv(self.path)
-        idx = df[df['trade_id'] == trade_id].index
-        if not idx.empty:
-            df.at[idx, "exit_price"] = exit_price
-            df.at[idx, "outcome"] = outcome
-            df.at[idx, "rating"] = "auto"
-            df.to_csv(self.path, index=False)
-
-class ProSignalStrategy:
+class MarketDataProvider:
+    """Enhanced market data with realistic price movements"""
+    
     def __init__(self):
-        self._name = "MA, RSI, S/D, Volatility Multi-confirm"
-    @property
-    def name(self): return self._name
-    def generate_signals(self, data):
-        data = data.copy()
-        MIN_LEN = 50
-        if data.empty or len(data) < MIN_LEN:
-            data['signal'] = 'hold'
-            return data
-
-        # Calculate indicators
-        data['short_ma'] = data['close'].rolling(14).mean()
-        data['long_ma'] = data['close'].rolling(45).mean()
-        delta = data['close'].diff()
-        gain = delta.where(delta > 0, 0).rolling(14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-        rs = gain / (loss.replace(0, 1e-6))
-        data['rsi'] = 100 - (100 / (1 + rs))
-        data['atr'] = (data['high']-data['low']).rolling(10).mean()
-        lows = data['low'].rolling(20).min()
-        highs = data['high'].rolling(20).max()
-        demand = (data['close'] <= lows.shift(1)).fillna(False)
-        supply = (data['close'] >= highs.shift(1)).fillna(False)
-
-        # Initialize signal column with default value
-        data['signal'] = 'hold'
+        self.pair_characteristics = {
+            "OTC_EURUSD": {"base": 1.0850, "volatility": 0.001, "trend_bias": 0.0002},
+            "OTC_GBPUSD": {"base": 1.2650, "volatility": 0.0015, "trend_bias": -0.0001},
+            "OTC_USDJPY": {"base": 148.50, "volatility": 0.002, "trend_bias": 0.0003},
+            "OTC_AUDUSD": {"base": 0.6720, "volatility": 0.0012, "trend_bias": 0.0001},
+            "OTC_USDCAD": {"base": 1.3580, "volatility": 0.001, "trend_bias": -0.0002},
+            "OTC_EURJPY": {"base": 161.20, "volatility": 0.0018, "trend_bias": 0.0002},
+            "OTC_GBPJPY": {"base": 187.80, "volatility": 0.002, "trend_bias": 0.0001},
+            "OTC_EURGBP": {"base": 0.8580, "volatility": 0.0008, "trend_bias": 0.0001},
+            "OTC_AUDCAD": {"base": 0.9120, "volatility": 0.0013, "trend_bias": 0.0},
+            "OTC_NZDUSD": {"base": 0.6180, "volatility": 0.0014, "trend_bias": 0.0001},
+            "OTC_XAUUSD": {"base": 2650.00, "volatility": 0.003, "trend_bias": 0.0005},
+            "OTC_XAGUSD": {"base": 31.50, "volatility": 0.004, "trend_bias": 0.0003},
+            "OTC_BTCUSD": {"base": 42000.00, "volatility": 0.008, "trend_bias": 0.001},
+            "OTC_ETHUSD": {"base": 2450.00, "volatility": 0.006, "trend_bias": 0.0008},
+            "OTC_USDCHF": {"base": 0.8850, "volatility": 0.0009, "trend_bias": -0.0001}
+        }
+    
+    def generate_realistic_data(self, pair: str, periods: int = 200) -> pd.DataFrame:
+        """Generate realistic market data with trends, support/resistance, and volatility clusters"""
+        char = self.pair_characteristics.get(pair, {"base": 1.2, "volatility": 0.001, "trend_bias": 0})
         
-        # BULLETPROOF METHOD: Loop through rows and assign individually
-        for i in range(len(data)):
+        # Create realistic price series
+        base_price = char["base"]
+        volatility = char["volatility"]
+        trend_bias = char["trend_bias"]
+        
+        # Add market regime changes
+        regime_changes = np.random.choice([0, 1], periods, p=[0.95, 0.05])  # 5% chance of regime change
+        
+        prices = [base_price]
+        current_trend = 0
+        
+        for i in range(1, periods):
+            if regime_changes[i]:
+                current_trend = np.random.choice([-1, 0, 1], p=[0.3, 0.4, 0.3])
+            
+            # Trend component
+            trend_component = current_trend * trend_bias * base_price
+            
+            # Volatility clustering
+            if i > 20:
+                recent_volatility = np.std(np.diff(prices[-20:]))
+                vol_multiplier = 1 + 0.5 * (recent_volatility / volatility - 1)
+            else:
+                vol_multiplier = 1
+            
+            # Random walk with trend and volatility clustering
+            change = trend_component + np.random.normal(0, volatility * base_price * vol_multiplier)
+            new_price = prices[-1] + change
+            prices.append(max(new_price, base_price * 0.8))  # Prevent extreme moves
+        
+        df = pd.DataFrame()
+        df['close'] = prices
+        df['open'] = df['close'].shift(1).fillna(df['close'].iloc[0])
+        
+        # Realistic high/low based on intrabar movement
+        intrabar_range = np.random.uniform(0.3, 1.2, periods) * volatility * base_price
+        df['high'] = df[['open', 'close']].max(axis=1) + intrabar_range * 0.6
+        df['low'] = df[['open', 'close']].min(axis=1) - intrabar_range * 0.4
+        
+        # Add volume proxy
+        df['volume'] = np.random.lognormal(10, 0.5, periods)
+        
+        df.index = pd.date_range(end=datetime.now(), periods=periods, freq='1min')
+        return df
+
+class AdvancedSignalStrategy:
+    """Multi-timeframe, self-learning trading strategy"""
+    
+    def __init__(self, strategy_weights: Dict[str, float]):
+        self.name = "Advanced Multi-Confirmation Strategy"
+        self.weights = strategy_weights
+        self.min_confidence_threshold = 0.75  # Higher threshold for quality
+    
+    def calculate_market_structure(self, data: pd.DataFrame) -> pd.Series:
+        """Identify market structure: trending, ranging, breakout"""
+        # Higher highs and higher lows = uptrend
+        # Lower highs and lower lows = downtrend
+        # Sideways = ranging
+        
+        highs = data['high'].rolling(20).max()
+        lows = data['low'].rolling(20).min()
+        
+        hh = data['high'] > highs.shift(5)  # Higher high
+        ll = data['low'] < lows.shift(5)   # Lower low
+        hl = (data['low'] > lows.shift(5)) & (data['high'] < highs.shift(5))  # Higher low
+        lh = (data['high'] < highs.shift(5)) & (data['low'] > lows.shift(5))  # Lower high
+        
+        # Trend strength
+        uptrend = (hh | hl).rolling(10).sum() > 6
+        downtrend = (ll | lh).rolling(10).sum() > 6
+        
+        trend_strength = pd.Series(0.0, index=data.index)
+        trend_strength[uptrend] = 1.0
+        trend_strength[downtrend] = -1.0
+        
+        return trend_strength
+    
+    def fibonacci_retracement_levels(self, data: pd.DataFrame) -> Dict[str, pd.Series]:
+        """Calculate dynamic Fibonacci levels"""
+        period = 50
+        swing_high = data['high'].rolling(period).max()
+        swing_low = data['low'].rolling(period).min()
+        
+        diff = swing_high - swing_low
+        
+        levels = {
+            'fib_236': swing_high - 0.236 * diff,
+            'fib_382': swing_high - 0.382 * diff,
+            'fib_500': swing_high - 0.500 * diff,
+            'fib_618': swing_high - 0.618 * diff,
+        }
+        
+        return levels
+    
+    def volume_price_analysis(self, data: pd.DataFrame) -> pd.Series:
+        """Volume-price relationship analysis"""
+        if 'volume' not in data.columns:
+            return pd.Series(0, index=data.index)
+        
+        # Price-volume correlation
+        price_change = data['close'].pct_change()
+        volume_ma = data['volume'].rolling(20).mean()
+        volume_ratio = data['volume'] / volume_ma
+        
+        # Strong moves with high volume = continuation
+        # Strong moves with low volume = reversal likely
+        vpa_signal = np.where(
+            (abs(price_change) > 0.005) & (volume_ratio > 1.5), 1.0,  # Strong move + high volume
+            np.where((abs(price_change) > 0.005) & (volume_ratio < 0.7), -0.5, 0)  # Strong move + low volume
+        )
+        
+        return pd.Series(vpa_signal, index=data.index)
+    
+    def multi_timeframe_confirmation(self, data: pd.DataFrame) -> Dict[str, float]:
+        """Analyze multiple timeframes for confirmation"""
+        # Simulate higher timeframe by resampling
+        try:
+            # 5-min timeframe
+            data_5m = data.resample('5min').agg({
+                'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'
+            }).dropna()
+            
+            if len(data_5m) < 50:
+                return {"trend_alignment": 0, "momentum_alignment": 0}
+            
+            # Calculate trend on higher timeframe
+            ema_20 = data_5m['close'].ewm(span=20).mean()
+            ema_50 = data_5m['close'].ewm(span=50).mean()
+            
+            higher_tf_trend = 1 if ema_20.iloc[-1] > ema_50.iloc[-1] else -1
+            
+            # Current timeframe trend
+            current_ema_20 = data['close'].ewm(span=20).mean()
+            current_ema_50 = data['close'].ewm(span=50).mean()
+            current_trend = 1 if current_ema_20.iloc[-1] > current_ema_50.iloc[-1] else -1
+            
+            trend_alignment = 1.0 if higher_tf_trend == current_trend else 0.0
+            
+            return {"trend_alignment": trend_alignment, "momentum_alignment": 0.8}
+            
+        except Exception:
+            return {"trend_alignment": 0.5, "momentum_alignment": 0.5}
+    
+    def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Generate high-quality signals with multiple confirmations"""
+        data = data.copy()
+        
+        if len(data) < 100:
+            data['signal'] = 'hold'
+            data['confidence'] = 0
+            return data
+        
+        # Core indicators
+        data['ema_9'] = data['close'].ewm(span=9).mean()
+        data['ema_21'] = data['close'].ewm(span=21).mean()
+        data['ema_50'] = data['close'].ewm(span=50).mean()
+        
+        # RSI with multiple periods
+        data['rsi_14'] = self.calculate_rsi(data['close'], 14)
+        data['rsi_21'] = self.calculate_rsi(data['close'], 21)
+        
+        # MACD
+        data['macd'], data['macd_signal'] = self.calculate_macd(data['close'])
+        
+        # Bollinger Bands
+        data['bb_upper'], data['bb_middle'], data['bb_lower'] = self.calculate_bollinger_bands(data['close'])
+        
+        # Advanced components
+        market_structure = self.calculate_market_structure(data)
+        fib_levels = self.fibonacci_retracement_levels(data)
+        vpa_signal = self.volume_price_analysis(data)
+        mtf_analysis = self.multi_timeframe_confirmation(data)
+        
+        # ATR for volatility
+        data['atr'] = self.calculate_atr(data)
+        
+        # Initialize signals
+        data['signal'] = 'hold'
+        data['confidence'] = 0.0
+        
+        # Multi-confirmation logic
+        for i in range(50, len(data)):
             try:
-                # Get the current row values safely
-                short_ma = data['short_ma'].iloc[i]
-                long_ma = data['long_ma'].iloc[i]
-                rsi = data['rsi'].iloc[i]
-                atr_current = data['atr'].iloc[i]
-                demand_current = demand.iloc[i]
-                supply_current = supply.iloc[i]
-                atr_mean = data['atr'].iloc[:i+1].rolling(30).mean().iloc[i] if i >= 29 else np.nan
+                current_price = data['close'].iloc[i]
                 
-                # Check buy conditions
-                if (pd.notna(short_ma) and pd.notna(long_ma) and pd.notna(rsi) and 
-                    pd.notna(atr_current) and pd.notna(atr_mean) and
-                    short_ma > long_ma and rsi < 35 and demand_current and
-                    atr_current > atr_mean):
+                # Trend conditions
+                trend_up = (data['ema_9'].iloc[i] > data['ema_21'].iloc[i] > data['ema_50'].iloc[i])
+                trend_down = (data['ema_9'].iloc[i] < data['ema_21'].iloc[i] < data['ema_50'].iloc[i])
+                
+                # Momentum conditions
+                rsi_oversold = data['rsi_14'].iloc[i] < 35 and data['rsi_21'].iloc[i] < 40
+                rsi_overbought = data['rsi_14'].iloc[i] > 65 and data['rsi_21'].iloc[i] > 60
+                
+                macd_bullish = data['macd'].iloc[i] > data['macd_signal'].iloc[i]
+                macd_bearish = data['macd'].iloc[i] < data['macd_signal'].iloc[i]
+                
+                # Support/Resistance from Fibonacci
+                near_support = any(abs(current_price - fib_levels[level].iloc[i]) < data['atr'].iloc[i] * 0.5 
+                                 for level in fib_levels if not pd.isna(fib_levels[level].iloc[i]))
+                
+                # Volatility condition
+                high_volatility = data['atr'].iloc[i] > data['atr'].iloc[:i].rolling(30).mean().iloc[-1] * 1.2
+                
+                # Volume confirmation
+                volume_confirmation = vpa_signal.iloc[i] > 0
+                
+                # Market structure
+                strong_trend = abs(market_structure.iloc[i]) > 0.7
+                
+                # BUY CONDITIONS
+                buy_conditions = [
+                    trend_up,  # Trend alignment
+                    rsi_oversold,  # Oversold but not extreme
+                    macd_bullish,  # Momentum confirmation
+                    near_support,  # Price at key level
+                    mtf_analysis["trend_alignment"] > 0.7,  # Higher timeframe confirmation
+                    high_volatility,  # Volatility for good moves
+                ]
+                
+                buy_score = sum(buy_conditions) / len(buy_conditions)
+                
+                # SELL CONDITIONS
+                sell_conditions = [
+                    trend_down,
+                    rsi_overbought,
+                    macd_bearish,
+                    near_support,  # Could be resistance in downtrend
+                    mtf_analysis["trend_alignment"] > 0.7,
+                    high_volatility,
+                ]
+                
+                sell_score = sum(sell_conditions) / len(sell_conditions)
+                
+                # Apply strategy weights
+                weighted_buy_score = buy_score * self.weights.get("multi_timeframe_confirmation", 1.0)
+                weighted_sell_score = sell_score * self.weights.get("multi_timeframe_confirmation", 1.0)
+                
+                # Final signal generation
+                if weighted_buy_score >= self.min_confidence_threshold:
                     data.iloc[i, data.columns.get_loc('signal')] = 'buy'
-                
-                # Check sell conditions
-                elif (pd.notna(short_ma) and pd.notna(long_ma) and pd.notna(rsi) and 
-                      pd.notna(atr_current) and pd.notna(atr_mean) and
-                      short_ma < long_ma and rsi > 65 and supply_current and
-                      atr_current > atr_mean):
+                    data.iloc[i, data.columns.get_loc('confidence')] = min(weighted_buy_score, 0.95)
+                elif weighted_sell_score >= self.min_confidence_threshold:
                     data.iloc[i, data.columns.get_loc('signal')] = 'sell'
+                    data.iloc[i, data.columns.get_loc('confidence')] = min(weighted_sell_score, 0.95)
                     
             except Exception:
                 continue
         
         return data
+    
+    def calculate_rsi(self, prices: pd.Series, period: int = 14) -> pd.Series:
+        delta = prices.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+        rs = gain / loss.replace(0, np.inf)
+        return 100 - (100 / (1 + rs))
+    
+    def calculate_macd(self, prices: pd.Series, fast=12, slow=26, signal=9):
+        ema_fast = prices.ewm(span=fast).mean()
+        ema_slow = prices.ewm(span=slow).mean()
+        macd = ema_fast - ema_slow
+        macd_signal = macd.ewm(span=signal).mean()
+        return macd, macd_signal
+    
+    def calculate_bollinger_bands(self, prices: pd.Series, period=20, std_dev=2):
+        sma = prices.rolling(window=period).mean()
+        std = prices.rolling(window=period).std()
+        upper = sma + (std * std_dev)
+        lower = sma - (std * std_dev)
+        return upper, sma, lower
+    
+    def calculate_atr(self, data: pd.DataFrame, period=14):
+        high_low = data['high'] - data['low']
+        high_close = np.abs(data['high'] - data['close'].shift())
+        low_close = np.abs(data['low'] - data['close'].shift())
+        ranges = pd.concat([high_low, high_close, low_close], axis=1)
+        true_range = ranges.max(axis=1)
+        return true_range.rolling(period).mean()
 
-class SignalGenerator:
-    def __init__(self, strategies): self.strategies = strategies
-    def run(self, data, pair, timeframe="1m"):
-        best_signal = None
-        best_conf = 0
-        active = []
-        for strat in self.strategies:
-            s_data = strat.generate_signals(data.copy())
-            if not s_data.empty and 'signal' in s_data.columns:
-                # Get the last signal value as a scalar
-                try:
-                    sig = str(s_data['signal'].iloc[-1])  # Convert to string to avoid Series issues
-                    if sig != 'hold':
-                        active.append(strat.name)
-                        atr_now = s_data['atr'].iloc[-1]
-                        atr_mean = s_data['atr'].rolling(30).mean().iloc[-1]
-                        conf = min(1.0, abs(
-                            float(atr_now) / (float(atr_mean) + 1e-6)
-                        )) if not pd.isnull(atr_now) and not pd.isnull(atr_mean) else 0.0
-                        if conf > best_conf:
-                            best_conf = conf
-                            best_signal = sig
-                except Exception:
-                    continue
-        confidence = round(best_conf, 3)
-        if best_signal and confidence > 0.7:
-            return [{
-                "timestamp":datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                "pair":pair,
-                "signal":best_signal,
-                "confidence":confidence,
-                "reasoning":', '.join(active),
-                "timeframe":timeframe
-            }]
-        else:
-            return []
-
-def price_simulation(last, tf_min):
-    drift = random.uniform(-0.001, 0.001)*tf_min
-    shock = random.gauss(0, 0.002)*tf_min
-    return round(last + drift + shock, 5)
-
-def get_otc_base_price(pair):
-    """Get realistic base prices for OTC currencies"""
-    otc_bases = {
-        "OTC_EURUSD": 1.0850, "OTC_GBPUSD": 1.2650, "OTC_USDJPY": 148.50,
-        "OTC_AUDUSD": 0.6720, "OTC_USDCAD": 1.3580, "OTC_EURJPY": 161.20,
-        "OTC_GBPJPY": 187.80, "OTC_EURGBP": 0.8580, "OTC_AUDCAD": 0.9120,
-        "OTC_NZDUSD": 0.6180, "OTC_XAUUSD": 2650.00, "OTC_XAGUSD": 31.50,
-        "OTC_BTCUSD": 42000.00, "OTC_ETHUSD": 2450.00
-    }
-    return otc_bases.get(pair, 1.2000)
-
-class LiveDataFetcher:
-    def get_live_forex_data(self, pair, tfmin, live=False):
-        # Check if it's an OTC pair
-        if pair.startswith("OTC_"):
-            # Generate realistic OTC data (always available)
-            base = get_otc_base_price(pair)
-            base += random.uniform(-0.02, 0.02) * base  # Add some daily variation
-            increments = np.cumsum(np.random.normal(0, 0.001, 100))
-            close = [round(base + float(inc) * base, 5) for inc in increments]
-            data = pd.DataFrame({"close": close})
-            data['open'] = data['close'] + np.random.normal(0, 0.0005, 100) * base
-            data['high'] = data[['open','close']].max(axis=1) + abs(np.random.normal(0, 0.0005, 100)) * base
-            data['low']  = data[['open','close']].min(axis=1) - abs(np.random.normal(0, 0.0005, 100)) * base
-            data.index = pd.date_range(end=datetime.now(), periods=100, freq='1min')
-            return data
+class SelfLearningEngine:
+    """Adaptive learning system that improves strategy weights based on performance"""
+    
+    def __init__(self):
+        self.performance_history = self.load_performance_history()
+        self.strategy_weights = self.load_strategy_weights()
+    
+    def load_performance_history(self) -> Dict:
+        try:
+            with open(PERFORMANCE_LOG_PATH, 'r') as f:
+                return json.load(f)
+        except:
+            return {"daily_performance": {}, "strategy_performance": {}}
+    
+    def load_strategy_weights(self) -> Dict[str, float]:
+        try:
+            with open(STRATEGY_WEIGHTS_PATH, 'r') as f:
+                return json.load(f)
+        except:
+            return {
+                "multi_timeframe_confirmation": 1.2,
+                "volume_price_analysis": 1.1,
+                "market_structure": 1.3,
+                "volatility_breakout": 1.0,
+                "fibonacci_levels": 1.1
+            }
+    
+    def analyze_recent_performance(self) -> Dict[str, float]:
+        """Analyze recent trade performance and identify patterns"""
+        try:
+            df = pd.read_csv(TRADE_HISTORY_PATH)
+            if df.empty:
+                return {}
+            
+            # Focus on last 50 trades
+            recent_trades = df.tail(50)
+            completed_trades = recent_trades[recent_trades['outcome'].isin(['win', 'loss'])]
+            
+            if completed_trades.empty:
+                return {}
+            
+            analysis = {}
+            
+            # Overall win rate
+            win_rate = len(completed_trades[completed_trades['outcome'] == 'win']) / len(completed_trades)
+            analysis['recent_win_rate'] = win_rate
+            
+            # Performance by confidence level
+            high_conf_trades = completed_trades[completed_trades['confidence'].astype(float) > 0.8]
+            if not high_conf_trades.empty:
+                high_conf_win_rate = len(high_conf_trades[high_conf_trades['outcome'] == 'win']) / len(high_conf_trades)
+                analysis['high_confidence_win_rate'] = high_conf_win_rate
+            
+            # Performance by timeframe
+            for tf in SUPPORTED_TIMEFRAMES.keys():
+                tf_trades = completed_trades[completed_trades['timeframe'].str.contains(str(SUPPORTED_TIMEFRAMES[tf]))]
+                if not tf_trades.empty:
+                    tf_win_rate = len(tf_trades[tf_trades['outcome'] == 'win']) / len(tf_trades)
+                    analysis[f'{tf}_win_rate'] = tf_win_rate
+            
+            # Performance by pair
+            pair_performance = {}
+            for pair in PAIRS:
+                pair_trades = completed_trades[completed_trades['pair'] == pair]
+                if len(pair_trades) >= 3:  # Minimum trades for statistical significance
+                    pair_win_rate = len(pair_trades[pair_trades['outcome'] == 'win']) / len(pair_trades)
+                    pair_performance[pair] = pair_win_rate
+            
+            analysis['pair_performance'] = pair_performance
+            
+            return analysis
+            
+        except Exception as e:
+            st.error(f"Performance analysis error: {e}")
+            return {}
+    
+    def adapt_strategy_weights(self, performance_analysis: Dict) -> Dict[str, float]:
+        """Adapt strategy weights based on recent performance"""
+        current_weights = self.strategy_weights.copy()
         
-        # Regular forex pairs - try live data first
-        if live and YF_OK:
-            try:
-                k = yf.download(tickers=pair, period="2d", interval=f"{tfmin}m", progress=False, auto_adjust=False)
-                if not k.empty:
-                    df = k.rename(columns={'Open':'open','High':'high','Low':'low','Close':'close'})
-                    return df.reset_index(drop=True)
-            except Exception as e:
-                st.warning(f"API error: {e}; using simulation.", icon="⚠️")
-        
-        # Fallback simulation for regular pairs
-        base = 1.2 + random.uniform(-0.05,0.05)
-        increments = np.cumsum(np.random.normal(0, 0.002, 100))
-        close = [round(base + float(inc), 5) for inc in increments]
-        data = pd.DataFrame({"close": close})
-        data['open'] = data['close'] + np.random.normal(0, 0.001, 100)
-        data['high'] = data[['open','close']].max(axis=1) + abs(np.random.normal(0,0.001,100))
-        data['low']  = data[['open','close']].min(axis=1) - abs(np.random.normal(0,0.001,100))
-        data.index = pd.date_range(end=datetime.now(), periods=100, freq='1min')
-        return data
-
-def resolve_open_trades(use_live=False):
-    try:
-        df = pd.read_csv(TRADE_HISTORY_PATH)
-        if df.empty:
-            return
-        now = datetime.now()
-        updated = False
-        for idx, row in df[df['outcome']=='pending'].iterrows():
-            try:
-                expiry_str = row.get("expiry_time", "")
-                if pd.isna(expiry_str) or not str(expiry_str).strip():
-                    continue
-                expiry = pd.to_datetime(expiry_str, errors='coerce')
-                if pd.isna(expiry):
-                    continue
-            except Exception:
-                continue
-            if now >= expiry:
-                tf = int(str(row.get("timeframe", "1")).replace("m", "").replace("Min", "").strip())
-                entry_str = row.get("entry_price", "0")
-                try: entry = float(entry_str or 0)
-                except: entry = 0
-                if use_live and YF_OK:
-                    fetcher = LiveDataFetcher()
-                    ticks = fetcher.get_live_forex_data(row['pair'], tf, live=True)
-                    exit_price = float(ticks['close'].iloc[-1]) if (ticks is not None and not ticks.empty) else price_simulation(entry, tf)
-                else:
-                    exit_price = price_simulation(entry, tf)
-                direction = row.get("signal", "buy")
-                outcome = "win" if (exit_price > entry if direction == "buy" else exit_price < entry) else "loss"
-                df.at[idx, "exit_price"] = exit_price
-                df.at[idx, "outcome"] = outcome
-                df.at[idx, "rating"] = "auto"
-                updated = True
-        if updated:
-            df.to_csv(TRADE_HISTORY_PATH, index=False)
-            st.toast("Pending trades auto-graded.", icon="⏰")
-    except Exception:
-        pass
-
-st.set_page_config(page_title="IQ Trading Assistant", layout="wide", page_icon="💡")
-st.title("🤖 Pro Pattern, API-Powered Trading Assistant")
-
-# Show market status
-now = datetime.now()
-is_weekend = now.weekday() >= 5  # Saturday=5, Sunday=6
-market_status = "🟢 OTC Markets Open (24/7)" if is_weekend else "🟢 All Markets Open"
-st.sidebar.markdown(f"**Market Status:** {market_status}")
-
-live_mode = st.sidebar.toggle("Live Data (yfinance)", False, help="Use real candles from Yahoo! Finance (regular pairs only). OTC pairs always use simulation.")
-
-resolve_open_trades(use_live=live_mode and YF_OK)
-if 'trade_history' not in st.session_state:
-    st.session_state.trade_history = pd.read_csv(TRADE_HISTORY_PATH)
-
-def refresh_data():
-    st.session_state.trade_history = pd.read_csv(TRADE_HISTORY_PATH)
-
-with st.sidebar:
-    st.header("⚙️ Controls")
-    timeframe = st.selectbox("Signal Timeframe", list(SUPPORTED_TIMEFRAMES.keys()), index=0)
-    
-    # Separate OTC and regular pairs for better UX
-    otc_pairs = [p for p in PAIRS if p.startswith("OTC_")]
-    regular_pairs = [p for p in PAIRS if not p.startswith("OTC_")]
-    
-    if is_weekend:
-        st.info("📅 Weekend Mode: Only OTC currencies are available for trading")
-        pairs = st.multiselect("OTC Pairs to Scan (24/7)", otc_pairs, default=otc_pairs[:6])
-    else:
-        pair_type = st.radio("Market Type", ["OTC (24/7)", "Regular Forex", "All"])
-        if pair_type == "OTC (24/7)":
-            pairs = st.multiselect("OTC Pairs to Scan", otc_pairs, default=otc_pairs[:6])
-        elif pair_type == "Regular Forex":
-            pairs = st.multiselect("Regular Forex Pairs", regular_pairs, default=regular_pairs[:3])
-        else:
-            pairs = st.multiselect("All Pairs to Scan", PAIRS, default=otc_pairs[:4] + regular_pairs[:2])
-    
-    max_signals = st.slider("Max signals per batch", 1, 10, 8)
-    
-    if st.button("Scan for Pro-Quality Signals", use_container_width=True):
-        signals = []
-        strat_objs = [ProSignalStrategy()]
-        fetcher = LiveDataFetcher()
-        for pair in pairs:
-            try:
-                df = fetcher.get_live_forex_data(pair, SUPPORTED_TIMEFRAMES[timeframe], live=live_mode and YF_OK)
-                found = SignalGenerator(strat_objs).run(df, pair, timeframe=f'{SUPPORTED_TIMEFRAMES[timeframe]}m')
-                if found: signals.extend(found)
-                if len(signals) >= max_signals: break
-            except Exception as e:
-                st.error(f"Error processing {pair}: {str(e)}")
-                continue
-        if signals:
-            for s in signals[:max_signals]:
-                try:
-                    df_price = fetcher.get_live_forex_data(s['pair'], SUPPORTED_TIMEFRAMES[timeframe], live=live_mode and YF_OK)
-                    entry_price = float(df_price['close'].iloc[-1])
-                    minutes = SUPPORTED_TIMEFRAMES[timeframe]
-                    expiry_time = (datetime.now() + timedelta(minutes=minutes)).strftime('%Y-%m-%d %H:%M:%S')
-                    log_obj = {**s, "entry_price": entry_price, "expiry_time": expiry_time}
-                    TradeLogger().log_signal(log_obj)
-                except Exception:
-                    continue
-            st.toast(f"Logged {min(len(signals), max_signals)} high-quality signals!", icon="🎯")
-        else: st.toast("No pro-level setups detected.",icon="🔍")
-        refresh_data()
-        st.rerun()
-
-st.header("📊 Signal Dashboard")
-df_trades = st.session_state.trade_history
-if df_trades.empty:
-    st.info("No trades yet. Use the sidebar to scan for signals.")
-else:
-    df_show = df_trades.copy()
-    try:
-        df_show['expiry_time'] = pd.to_datetime(df_show['expiry_time'], errors='coerce').dt.strftime('%d-%b %H:%M:%S')
-        st.dataframe(df_show.sort_values('timestamp',ascending=False)[[
-            "timestamp","pair","signal","confidence","timeframe","entry_price","expiry_time","exit_price","outcome","reasoning"
-            ]],hide_index=True,use_container_width=True)
-    except Exception:
-        st.dataframe(df_trades, hide_index=True, use_container_width=True)
-
-col1, col2 = st.columns(2)
-with col1:
-    st.subheader("📈 Analytics")
-    summary = {"win_rate":"N/A","total":0}
-    try:
-        completed = df_trades[df_trades['outcome'].isin(['win','loss'])]
-        if not completed.empty:
-            wins = len(completed[completed['outcome']=='win'])
-            summary["win_rate"] = f"{(wins/len(completed))*100:.2f}%"
-            summary["total"] = len(completed)
-    except: pass
-    st.metric("Win Rate", summary['win_rate'])
-    st.metric("Completed Trades", summary['total'])
-
-with col2:
-    st.subheader("✍️ Feedback / Adapt AI")
-    pending = df_trades[df_trades['rating']=='pending']
-    if not pending.empty:
-        with st.form("feedback_form"):
-            trade_id = st.selectbox("Pending Trade",pending['trade_id'])
-            outcome = st.radio("Outcome",["win","loss"])
-            rating = "accepted" if outcome=="win" else "rejected"
-            comment = st.text_input("Comment (optional)")
-            submit = st.form_submit_button("Submit")
-            if submit:
-                feedback = SignalFeedback(trade_id, outcome, rating, comment)
-                TradeLogger().add_feedback(feedback)
-                st.success("AI updated from feedback!")
-                time.sleep(1)
-                refresh_data()
-    else:
-        st.info("No pending trades to rate.")
-
-st.sidebar.header("📥 Export")
-export = df_trades.to_csv(index=False).encode()
-st.sidebar.download_button("Download CSV",export,"trade_history.csv","text/csv",use_container_width=True)
-
-with st.expander("💡 Pro Mentor Tip"):
-    pro_tips = [
-        "Wait for true alignment—sometimes no trade is the best trade.",
-        "Only act when multiple signals confirm a clear edge.",
-        "Big money leaves footprints; be patient, follow structure.",
-        "Risk management and discipline are your real edge.",
-        "Avoid trading in the middle—focus on supply and demand extremes.",
-        "Let high-confidence trades come to you, not the other way around.",
-        "OTC markets offer 24/7 opportunities but require the same discipline.",
-        "Weekend trading on OTC pairs can be less volatile—use smaller timeframes."
-    ]
-    if st.button("Show Mentor Tip"):
-        st.info(random.choice(pro_tips))
+        try:
+            recent_win_rate = performance_analysis.get('recent_win_rate', 0.5)
+            
+            # If performance is poor, be more conservative
+            if recent_win_rate < 0.6:
+                current_weigh
