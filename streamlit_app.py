@@ -1,174 +1,257 @@
-# ────────────────────────────────────────────────────────────────
-#   REAL-TIME AI TRADING ASSISTANT  •  Finnhub WebSocket edition
-#   Tested 2025-08-05 – zero errors in Streamlit 1.35 / Py 3.10
-# ────────────────────────────────────────────────────────────────
-import json, threading, time
-from datetime import datetime, timedelta
+# streamlit_app.py - LIVE AI Trading with Finnhub WebSocket
+import json
+import threading
+import time
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 import websocket
 
-# ────────── USER CONFIG ──────────
-FINNHUB_API_KEY = "d28sk6pr01qle9gskjv0d28sk6pr01qle9gskjvg"  # ← your key
-PAIRS = [
-    "OANDA:EUR_USD",
-    "OANDA:GBP_USD",
-    "OANDA:USD_JPY",
-    "OANDA:AUD_USD",
-    "OANDA:USD_CAD",
-]
-MIN_CONFIDENCE = 0.75           # only show high-quality trades
-HISTORY_FILE   = "trade_history.csv"
+# Configuration
+FINNHUB_API_KEY = "d28sk6pr01qle9gskjv0d28sk6pr01qle9gskjvg"
+PAIRS = ["OANDA:EUR_USD", "OANDA:GBP_USD", "OANDA:USD_JPY", "OANDA:AUD_USD", "OANDA:USD_CAD"]
+MIN_CONFIDENCE = 0.75
 
-# ────────── RUNTIME BUFFERS ──────────
-tick_buf  = {p: [] for p in PAIRS}     # raw ticks   (max 200)
-price_now = {p:  0  for p in PAIRS}    # last price
-log_sig   = []                         # recent signals (UI)
-
+# Data buffers
+price_latest = {p: 0 for p in PAIRS}
+tick_buffer = {p: [] for p in PAIRS}
+bar_buffer = {p: pd.DataFrame() for p in PAIRS}
+log_signals = []
 lock = threading.Lock()
-ws_connected = False
+websocket_connected = False
 
-# ────────── WEBSOCKET CALLBACKS ──────────
-def _on_open(ws):
-    global ws_connected
-    ws_connected = True
-    for sym in PAIRS:
-        ws.send(json.dumps({"type": "subscribe", "symbol": sym}))
+# WebSocket callbacks
+def on_open(ws):
+    global websocket_connected
+    websocket_connected = True
+    for p in PAIRS:
+        ws.send(json.dumps({"type": "subscribe", "symbol": p}))
 
-def _on_msg(ws, msg):
-    data = json.loads(msg)
-    if data.get("type") != "trade":
-        return
-    for t in data["data"]:
-        sym   = t["s"]
-        price = t["p"]
-        ts    = pd.to_datetime(t["t"], unit="ms")
-        with lock:
-            tick_buf[sym].append((ts, price))
-            price_now[sym] = price
-            if len(tick_buf[sym]) > 200:
-                tick_buf[sym] = tick_buf[sym][-200:]
+def on_message(ws, message):
+    global price_latest
+    try:
+        data = json.loads(message)
+        if data.get("type") != "trade":
+            return
+        for trade in data.get("data", []):
+            sym = trade.get("s")
+            price = trade.get("p")
+            ts = datetime.utcfromtimestamp(trade.get("t") / 1000)
+            with lock:
+                tick_buffer[sym].append((ts, price))
+                price_latest[sym] = price
+                if len(tick_buffer[sym]) > 200:
+                    tick_buffer[sym] = tick_buffer[sym][-200:]
+    except Exception as e:
+        print(f"Tick error: {e}")
 
-def _on_err(ws, err):  # keep UI informed
-    global ws_connected
-    ws_connected = False
-    print("WebSocket error:", err)
+def on_error(ws, error):
+    global websocket_connected
+    websocket_connected = False
+    print(f"WebSocket error: {error}")
 
-def _on_close(ws, *_):
-    global ws_connected
-    ws_connected = False
-    print("WebSocket closed – reconnecting…")
+def on_close(ws, *_):
+    global websocket_connected
+    websocket_connected = False
+    print("WebSocket closed")
 
-def _run_ws():
-    url = f"wss://ws.finnhub.io?token={FINNHUB_API_KEY}"
-    websocket.WebSocketApp(
-        url,
-        on_open    = _on_open,
-        on_message = _on_msg,
-        on_error   = _on_err,
-        on_close   = _on_close
-    ).run_forever()
+def start_websocket():
+    ws = websocket.WebSocketApp(
+        f"wss://ws.finnhub.io?token={FINNHUB_API_KEY}",
+        on_open=on_open,
+        on_message=on_message,
+        on_error=on_error,
+        on_close=on_close
+    )
+    ws.run_forever()
 
-# ────────── HELPER: TICKS → 1-MIN OHLC ──────────
-def ohlc_from_ticks(sym):
-    with lock:
-        df = pd.DataFrame(tick_buf[sym], columns=["ts", "price"])
-    if df.empty:
-        return None
-    df.set_index("ts", inplace=True)
-    ohlc = df["price"].resample("1min").ohlc().dropna()
-    if len(ohlc) < 60:  # backfill for indicators
-        last = ohlc["close"].iloc[-1]
-        fill  = 60 - len(ohlc)
-        idx   = pd.date_range(ohlc.index[0]-pd.Timedelta(minutes=fill),
-                              periods=fill, freq="1min")
-        noise = np.random.normal(0, last*0.0005, fill)
-        back  = pd.DataFrame(index=idx)
-        back["close"] = last + noise
-        back["open"]  = back["close"].shift(1).fillna(back["close"])
-        back["high"]  = back[["open","close"]].max(axis=1)
-        back["low"]   = back[["open","close"]].min(axis=1)
-        ohlc = pd.concat([back, ohlc]).sort_index()
-    return ohlc[-120:]  # keep last 2 h
+def build_ohlc(symbol):
+    while True:
+        try:
+            now = datetime.utcnow().replace(second=0, microsecond=0)
+            with lock:
+                ticks = tick_buffer[symbol]
+                old_ticks = [t for t in ticks if t[0] < now]
+                tick_buffer[symbol] = [t for t in ticks if t[0] >= now]
+                if not old_ticks:
+                    time.sleep(1)
+                    continue
+                df = pd.DataFrame(old_ticks, columns=["dt", "price"])
+                df.set_index("dt", inplace=True)
+                o = df["price"].iloc[0]
+                h = df["price"].max()
+                l = df["price"].min()
+                c = df["price"].iloc[-1]
+                v = len(df)
+                bar = pd.DataFrame({
+                    "open": [o], "high": [h], "low": [l], "close": [c], "volume": [v]
+                }, index=[now - pd.Timedelta(minutes=1)])
+                
+                if bar_buffer[symbol].empty:
+                    bar_buffer[symbol] = bar
+                else:
+                    bar_buffer[symbol] = pd.concat([bar_buffer[symbol], bar]).iloc[-600:]
+        except Exception as e:
+            print(f"OHLC error: {e}")
+        time.sleep(1)
 
-# ────────── SIMPLE BUT ROBUST STRATEGY ──────────
-def rsi(series, n=14):
+def rsi(series, period=14):
     delta = series.diff()
-    up   = delta.clip(lower=0).rolling(n).mean()
-    down = (-delta.clip(upper=0)).rolling(n).mean()
-    rs   = up / down
-    return 100 - 100/(1+rs)
+    gain = delta.where(delta > 0, 0).rolling(window=period).mean()
+    loss = -delta.where(delta < 0, 0).rolling(window=period).mean()
+    rs = gain / loss
+    return 100 - 100 / (1 + rs)
 
-def get_signal(df):
+def get_signal(df, weights):
     if len(df) < 50:
-        return "hold", 0
-    ema9  = df["close"].ewm(span=9).mean().iloc[-1]
-    ema21 = df["close"].ewm(span=21).mean().iloc[-1]
-    ema50 = df["close"].ewm(span=50).mean().iloc[-1]
-    r = rsi(df["close"]).iloc[-1]
-    atr = (df["high"]-df["low"]).rolling(14).mean().iloc[-1]
-    atr30 = (df["high"]-df["low"]).rolling(30).mean().iloc[-1]
+        return "hold", 0.0
+        
+    df = df.copy()
+    df["ema9"] = df["close"].ewm(span=9).mean()
+    df["ema21"] = df["close"].ewm(span=21).mean()
+    df["ema50"] = df["close"].ewm(span=50).mean()
+    df["rsi"] = rsi(df["close"])
+    df["atr"] = (df["high"] - df["low"]).rolling(window=14).mean()
+    df["atr_avg"] = df["atr"].rolling(window=30).mean()
 
-    score, cond = 0, 0
-    if ema9 > ema21 > ema50:
-        score += .3; cond += 1
-        if r < 35:    score += .25; cond += 1
-        if atr > atr30*1.2: score += .2; cond += 1
-        if cond >= 3: return "buy", min(score, .95)
-    if ema9 < ema21 < ema50:
-        score += .3; cond += 1
-        if r > 65:    score += .25; cond += 1
-        if atr > atr30*1.2: score += .2; cond += 1
-        if cond >= 3: return "sell", min(score, .95)
-    return "hold", 0
+    # Latest values
+    i = len(df) - 1
+    score = 0
+    conditions = 0
 
-# ────────── STREAMLIT UI ──────────
-st.set_page_config("🔴 REAL-TIME AI Trading", layout="wide", page_icon="📈")
-st.title("🔴 REAL-TIME AI Trading Assistant (Finnhub)")
+    # Trend analysis
+    if df["ema9"].iloc[i] > df["ema21"].iloc[i] > df["ema50"].iloc[i]:
+        score += 0.3 * weights.get("trend", 1.2)
+        conditions += 1
+        trend_direction = "up"
+    elif df["ema9"].iloc[i] < df["ema21"].iloc[i] < df["ema50"].iloc[i]:
+        score += 0.3 * weights.get("trend", 1.2)
+        conditions += 1
+        trend_direction = "down"
+    else:
+        trend_direction = "neutral"
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("WebSocket", "🔴 CONNECTING…")
-c2.metric("Pairs", len(PAIRS))
-c3.metric("Strategy", "EMA + RSI + ATR")
-c4.metric("Conf ≥", f"{MIN_CONFIDENCE:.2f}")
+    # RSI momentum
+    if df["rsi"].iloc[i] < 35:
+        score += 0.25 * weights.get("momentum", 1.1)
+        conditions += 1
+        rsi_condition = "oversold"
+    elif df["rsi"].iloc[i] > 65:
+        score += 0.25 * weights.get("momentum", 1.1)
+        conditions += 1
+        rsi_condition = "overbought"
+    else:
+        rsi_condition = "neutral"
 
-# start WS only once
-if "ws_started" not in st.session_state:
-    threading.Thread(target=_run_ws, daemon=True).start()
-    st.session_state["ws_started"] = True
+    # Volatility
+    if df["atr"].iloc[i] > df["atr_avg"].iloc[i] * 1.2:
+        score += 0.2 * weights.get("volatility", 1.0)
+        conditions += 1
 
-# main loop
-while True:
-    c1.metric("WebSocket", "🟢 LIVE" if ws_connected else "🟥 OFF")
-    cols = st.columns(len(PAIRS))
-    new_sigs = []
+    # Momentum confirmation
+    if i >= 5:
+        momentum = (df["close"].iloc[i] - df["close"].iloc[i-5]) / df["close"].iloc[i-5]
+        if abs(momentum) > 0.001:
+            score += 0.25
+            conditions += 1
 
-    for i, sym in enumerate(PAIRS):
-        pair = sym.split(":")[1].replace("_","")
-        price = price_now[sym]
-        df = ohlc_from_ticks(sym)
-        sig_txt = ""
-        if df is not None:
-            sig, conf = get_signal(df)
-            if sig != "hold" and conf >= MIN_CONFIDENCE:
-                sig_txt = f"🎯 {sig.upper()} ({conf:.2f})"
-                new_sigs.append({
-                    "time": datetime.utcnow().strftime("%H:%M:%S"),
-                    "pair": pair, "sig": sig.upper(),
-                    "price": f"{price:.5f}", "conf": f"{conf:.2f}"
-                })
-        cols[i].metric(pair, f"{price:.5f}" if price else "---", sig_txt)
+    # Generate signals
+    if score >= 0.75 and conditions >= 3:
+        if trend_direction == "up" and rsi_condition == "oversold":
+            return "buy", min(score, 0.95)
+        elif trend_direction == "down" and rsi_condition == "overbought":
+            return "sell", min(score, 0.95)
+    
+    return "hold", 0.0
 
-    # log & show last 15 signals
-    if new_sigs:
-        log_sig.extend(new_sigs)
-        log_sig[:] = log_sig[-15:]
+# Strategy weights
+strategy_weights = {
+    "trend": 1.2,
+    "momentum": 1.1,
+    "volatility": 1.0,
+}
 
-    if log_sig:
-        st.subheader("Recent High-Confidence Signals")
-        st.table(pd.DataFrame(log_sig).iloc[::-1])
+# Streamlit UI
+st.set_page_config(page_title="🔴 LIVE AI Trading", layout="wide", page_icon="🔴")
+st.title("🔴 LIVE AI Trading Dashboard - Finnhub Stream")
 
-    time.sleep(1)
-    st.experimental_rerun()
+# Status indicators
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("WebSocket", "🟢 Connected" if websocket_connected else "🔴 Connecting...")
+col2.metric("Pairs", len(PAIRS))
+col3.metric("Strategy", "EMA + RSI + Momentum")
+col4.metric("Min Confidence", f">= {MIN_CONFIDENCE:.2f}")
+
+# Start background threads
+if "started" not in st.session_state:
+    for pair in PAIRS:
+        threading.Thread(target=build_ohlc, args=(pair,), daemon=True).start()
+    threading.Thread(target=start_websocket, daemon=True).start()
+    st.session_state["started"] = True
+    st.success("🚀 Real-time WebSocket connection initiated!")
+
+# Main price display
+cols = st.columns(len(PAIRS))
+
+# Main loop
+current_signals = []
+for i, pair in enumerate(PAIRS):
+    if not bar_buffer[pair].empty:
+        df = bar_buffer[pair].copy()
+        signal, confidence = get_signal(df, strategy_weights)
+        price = price_latest.get(pair, 0)
+        pair_name = pair.split(":")[1].replace("_", "")
+        
+        # Display signal
+        signal_text = ""
+        if signal != "hold" and confidence >= MIN_CONFIDENCE:
+            signal_text = f"🎯 {signal.upper()} ({confidence:.2f})"
+            current_signals.append({
+                "time": datetime.utcnow().strftime("%H:%M:%S"),
+                "pair": pair_name,
+                "signal": signal.upper(),
+                "confidence": f"{confidence:.2f}",
+                "price": f"{price:.5f}"
+            })
+        
+        cols[i].metric(
+            pair_name,
+            f"{price:.5f}" if price > 0 else "Loading...",
+            signal_text
+        )
+    else:
+        pair_name = pair.split(":")[1].replace("_", "")
+        cols[i].metric(pair_name, "Connecting...", "")
+
+# Log high-confidence signals
+if current_signals:
+    log_signals.extend(current_signals)
+    if len(log_signals) > 20:
+        log_signals = log_signals[-20:]
+
+# Display recent signals
+if log_signals:
+    st.subheader("🎯 Recent High-Confidence Signals")
+    signals_df = pd.DataFrame(log_signals[-10:])  # Last 10 signals
+    st.dataframe(signals_df, use_container_width=True, hide_index=True)
+
+# Connection status
+st.sidebar.subheader("📊 Connection Status")
+if websocket_connected:
+    st.sidebar.success("✅ Finnhub WebSocket Connected")
+    with lock:
+        total_ticks = sum(len(ticks) for ticks in tick_buffer.values())
+    st.sidebar.info(f"Real-time ticks: {total_ticks}")
+else:
+    st.sidebar.warning("⚠️ Connecting to WebSocket...")
+
+st.sidebar.subheader("🔧 System Info")
+st.sidebar.info("Data Source: Finnhub Real-time")
+st.sidebar.info("Strategy: Multi-confirmation AI")
+st.sidebar.info("Update Rate: Sub-second")
+
+# Auto-refresh every 1 second
+time.sleep(1)
+st.rerun()
