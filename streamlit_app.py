@@ -1,4 +1,4 @@
-# streamlit_app.py  ── Real-Time FOREX AI with Twelve Data
+# streamlit_app.py  ── Real-Time FOREX AI with Twelve Data (FIXED)
 import json
 import threading
 import time
@@ -11,7 +11,7 @@ import pandas as pd
 import streamlit as st
 
 # ───────────────────────── CONFIG ─────────────────────────
-API_KEY = "9618464db4744b20b4df32148ff81ff4"   # Twelve Data API key
+API_KEY = "9618464db4744b20b4df32148ff81ff4"   # Your Twelve Data API key
 PAIRS   = ["EUR/USD", "GBP/USD", "USD/JPY"]     # 3 core forex pairs
 MIN_CONFIDENCE = 0.75                           # AI signal threshold
 REFRESH_SEC = 5                                 # data poll interval
@@ -99,12 +99,12 @@ def classify(df):
     df["atr_avg"] = df["atr"].rolling(30).mean()
 
     i = -1  # last row
-    trend_up   = df["ema9"][i] > df["ema21"][i] > df["ema50"][i]
-    trend_down = df["ema9"][i] < df["ema21"][i] < df["ema50"][i]
-    rsi_low  = df["rsi"][i] < 35
-    rsi_high = df["rsi"][i] > 65
-    high_vol = df["atr"][i] > df["atr_avg"][i] * 1.2
-    momentum = (df["close"][i] - df["close"][i-5]) / df["close"][i-5]
+    trend_up   = df["ema9"].iloc[i] > df["ema21"].iloc[i] > df["ema50"].iloc[i]
+    trend_down = df["ema9"].iloc[i] < df["ema21"].iloc[i] < df["ema50"].iloc[i]
+    rsi_low  = df["rsi"].iloc[i] < 35
+    rsi_high = df["rsi"].iloc[i] > 65
+    high_vol = df["atr"].iloc[i] > df["atr_avg"].iloc[i] * 1.2
+    momentum = (df["close"].iloc[i] - df["close"].iloc[i-5]) / df["close"].iloc[i-5]
     strong_mom = abs(momentum) > 0.001
 
     score = 0
@@ -172,6 +172,6 @@ if log_signals:
     st.subheader("Latest high-confidence signals")
     st.table(pd.DataFrame(log_signals[::-1]))
 
-# footer auto-refresh every 3 s
+# FIXED: Use st.rerun() instead of deprecated st.experimental_rerun()
 time.sleep(3)
-st.experimental_rerun()
+st.rerun()
