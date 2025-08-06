@@ -1,8 +1,8 @@
 name: 24/7 Self-Learning Trading AI
 on:
   schedule:
-    - cron: '*/5 * * * *'  # Runs every 5 minutes
-  workflow_dispatch:  # Manual trigger button
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 jobs:
   generate-trading-signals:
@@ -30,4 +30,3 @@ jobs:
           git add -A
           git diff --staged --quiet || git commit -m "🤖 AI Trading Update: $(date)"
           git push
-          
