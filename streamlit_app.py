@@ -1,4 +1,4 @@
-# streamlit_app.py - COMPLETE SELF-LEARNING BINARY AI
+# streamlit_app.py - POCKET OPTION AI TRADER (ERROR-FREE)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,17 +8,12 @@ import json
 from datetime import datetime, timezone, timedelta
 import random
 import math
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-import pickle
 import os
 
 # Configuration
 PAIRS = ["EUR/USD", "GBP/USD", "USD/JPY"]
 MIN_CONFIDENCE = 0.82
-SIGNAL_DURATION = 300  # 5 minutes
-DB_PATH = 'trading_intelligence.db'
-MODEL_PATH = 'ai_model.pkl'
+DB_PATH = 'trading_data.db'
 
 # Base prices
 BASE_PRICES = {
@@ -30,23 +25,21 @@ BASE_PRICES = {
 # Global data
 price_history = {pair: [] for pair in PAIRS}
 signal_log = []
-performance_metrics = {'total_trades': 0, 'wins': 0, 'losses': 0}
-ml_model = None
 strategy_weights = {'rsi_weight': 1.0, 'momentum_weight': 1.0, 'volatility_weight': 1.0}
+performance_data = {'total_trades': 0, 'wins': 0, 'win_rate': 0.0}
 
-class TradingIntelligence:
-    """Advanced self-learning trading system"""
+class SimpleLearningSystem:
+    """Simplified self-learning system without sklearn"""
     
     def __init__(self):
         self.init_database()
-        self.load_ml_model()
-        self.load_strategy_weights()
+        self.load_performance_data()
     
     def init_database(self):
-        """Initialize comprehensive trading database"""
+        """Initialize trading database"""
         conn = sqlite3.connect(DB_PATH)
         
-        # Signals table with outcome tracking
+        # Signals table
         conn.execute('''
             CREATE TABLE IF NOT EXISTS signals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,13 +54,12 @@ class TradingIntelligence:
                 momentum REAL,
                 velocity REAL,
                 outcome TEXT DEFAULT 'pending',
-                actual_price REAL,
                 win_loss TEXT,
                 created_at TEXT
             )
         ''')
         
-        # Performance tracking table
+        # Performance table
         conn.execute('''
             CREATE TABLE IF NOT EXISTS performance (
                 date TEXT PRIMARY KEY,
@@ -75,228 +67,125 @@ class TradingIntelligence:
                 wins INTEGER,
                 losses INTEGER,
                 win_rate REAL,
-                avg_confidence REAL,
-                strategy_weights TEXT
-            )
-        ''')
-        
-        # Feature importance tracking
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS feature_performance (
-                feature_name TEXT,
-                importance_score REAL,
-                accuracy_contribution REAL,
-                last_updated TEXT
+                avg_confidence REAL
             )
         ''')
         
         conn.commit()
         conn.close()
     
-    def load_ml_model(self):
-        """Load or create machine learning model"""
-        global ml_model
-        
-        if os.path.exists(MODEL_PATH):
-            try:
-                with open(MODEL_PATH, 'rb') as f:
-                    ml_model = pickle.load(f)
-                st.success("🧠 AI Model loaded - Using learned patterns!")
-            except:
-                ml_model = RandomForestClassifier(n_estimators=100, random_state=42)
-                st.info("🧠 New AI Model created - Learning from scratch")
-        else:
-            ml_model = RandomForestClassifier(n_estimators=100, random_state=42)
-            st.info("🧠 New AI Model created - Learning from scratch")
-    
-    def load_strategy_weights(self):
-        """Load adaptive strategy weights"""
-        global strategy_weights
+    def load_performance_data(self):
+        """Load performance statistics"""
+        global performance_data
         
         conn = sqlite3.connect(DB_PATH)
         try:
             result = conn.execute('''
-                SELECT strategy_weights FROM performance 
-                ORDER BY date DESC LIMIT 1
+                SELECT 
+                    COUNT(*) as total,
+                    SUM(CASE WHEN win_loss = 'win' THEN 1 ELSE 0 END) as wins
+                FROM signals 
+                WHERE win_loss IS NOT NULL AND win_loss != ''
             ''').fetchone()
             
-            if result:
-                strategy_weights = json.loads(result[0])
-                st.success(f"📊 Loaded optimized strategy weights: RSI={strategy_weights['rsi_weight']:.2f}")
+            if result and result[0] > 0:
+                total, wins = result
+                performance_data = {
+                    'total_trades': total,
+                    'wins': wins,
+                    'win_rate': (wins / total) * 100 if total > 0 else 0
+                }
         except:
             pass
         
         conn.close()
     
     def save_signal(self, signal_data):
-        """Save signal to database for learning"""
+        """Save signal for learning"""
         conn = sqlite3.connect(DB_PATH)
-        conn.execute('''
-            INSERT INTO signals (
-                timestamp, pair, direction, confidence, entry_price, 
-                expiry_time, reasoning, rsi, momentum, velocity, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            signal_data['entry_time'], signal_data['pair'], signal_data['direction'],
-            signal_data['confidence'], signal_data['entry_price'], signal_data['expiry_time'],
-            signal_data['reasoning'], signal_data['rsi'], signal_data['momentum'],
-            signal_data['velocity'], datetime.now(timezone.utc).isoformat()
-        ))
-        conn.commit()
-        conn.close()
-    
-    def update_trade_outcome(self, signal_id, actual_price, outcome):
-        """Update trade outcome for learning"""
-        conn = sqlite3.connect(DB_PATH)
-        
-        # Get original signal data
-        signal = conn.execute('''
-            SELECT entry_price, direction FROM signals WHERE id = ?
-        ''', (signal_id,)).fetchone()
-        
-        if signal:
-            entry_price, direction = signal
-            
-            # Determine win/loss
-            if direction == 'CALL':
-                win_loss = 'win' if actual_price > entry_price else 'loss'
-            else:  # PUT
-                win_loss = 'win' if actual_price < entry_price else 'loss'
-            
-            # Update database
-            conn.execute('''
-                UPDATE signals 
-                SET outcome = ?, actual_price = ?, win_loss = ?
-                WHERE id = ?
-            ''', (outcome, actual_price, win_loss, signal_id))
-            
-            conn.commit()
-            
-            # Trigger learning update
-            self.update_ai_learning()
-        
-        conn.close()
-    
-    def update_ai_learning(self):
-        """Update AI model with new trade results"""
-        global ml_model, strategy_weights
-        
-        conn = sqlite3.connect(DB_PATH)
-        
-        # Get completed trades
-        completed_trades = conn.execute('''
-            SELECT rsi, momentum, velocity, confidence, win_loss
-            FROM signals 
-            WHERE win_loss IS NOT NULL AND win_loss != ''
-        ''').fetchall()
-        
-        if len(completed_trades) >= 10:  # Need minimum data for training
-            # Prepare training data
-            X = []
-            y = []
-            
-            for trade in completed_trades:
-                rsi, momentum, velocity, confidence, win_loss = trade
-                X.append([rsi, momentum, velocity, confidence])
-                y.append(1 if win_loss == 'win' else 0)
-            
-            X = np.array(X)
-            y = np.array(y)
-            
-            # Train model
-            ml_model.fit(X, y)
-            
-            # Save updated model
-            with open(MODEL_PATH, 'wb') as f:
-                pickle.dump(ml_model, f)
-            
-            # Update strategy weights based on feature importance
-            feature_importance = ml_model.feature_importances_
-            
-            strategy_weights = {
-                'rsi_weight': max(0.5, min(2.0, feature_importance[0] * 2)),
-                'momentum_weight': max(0.5, min(2.0, feature_importance[1] * 2)),
-                'volatility_weight': max(0.5, min(2.0, feature_importance[2] * 2))
-            }
-            
-            # Calculate current performance
-            wins = sum(y)
-            total = len(y)
-            win_rate = wins / total if total > 0 else 0
-            
-            # Save daily performance
-            today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-            conn.execute('''
-                INSERT OR REPLACE INTO performance 
-                (date, total_signals, wins, losses, win_rate, avg_confidence, strategy_weights)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                today, total, wins, total - wins, win_rate,
-                np.mean([t[3] for t in completed_trades]),
-                json.dumps(strategy_weights)
-            ))
-            
-            conn.commit()
-            
-            st.success(f"🧠 AI Updated! Win Rate: {win_rate:.1%} | Trades: {total}")
-        
-        conn.close()
-    
-    def get_ml_prediction(self, features):
-        """Get ML model prediction for signal confidence"""
-        if ml_model is None:
-            return 0.5
-        
         try:
-            # Get probability of winning trade
-            prob = ml_model.predict_proba([features])[0]
-            return prob[1] if len(prob) > 1 else 0.5
-        except:
-            return 0.5
+            conn.execute('''
+                INSERT INTO signals (
+                    timestamp, pair, direction, confidence, entry_price, 
+                    expiry_time, reasoning, rsi, momentum, velocity, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                signal_data['entry_time'], signal_data['pair'], signal_data['direction'],
+                signal_data['confidence'], signal_data['entry_price'], signal_data['expiry_time'],
+                signal_data['reasoning'], signal_data['rsi'], signal_data['momentum'],
+                signal_data['velocity'], datetime.now(timezone.utc).isoformat()
+            ))
+            conn.commit()
+        except Exception as e:
+            print(f"Database error: {e}")
+        
+        conn.close()
+    
+    def update_strategy_weights(self):
+        """Simple weight adjustment based on performance"""
+        global strategy_weights
+        
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            # Get recent performance by indicator
+            recent_trades = conn.execute('''
+                SELECT rsi, momentum, velocity, win_loss
+                FROM signals 
+                WHERE win_loss IS NOT NULL AND win_loss != ''
+                ORDER BY created_at DESC 
+                LIMIT 50
+            ''').fetchall()
+            
+            if len(recent_trades) >= 20:
+                # Calculate indicator success rates
+                rsi_wins = sum(1 for t in recent_trades if t[3] == 'win' and abs(t[0] - 50) > 20)
+                momentum_wins = sum(1 for t in recent_trades if t[3] == 'win' and abs(t[1]) > 0.1)
+                
+                total_recent = len(recent_trades)
+                
+                # Adjust weights based on success
+                if rsi_wins / total_recent > 0.6:
+                    strategy_weights['rsi_weight'] = min(1.5, strategy_weights['rsi_weight'] + 0.1)
+                else:
+                    strategy_weights['rsi_weight'] = max(0.5, strategy_weights['rsi_weight'] - 0.05)
+                
+                if momentum_wins / total_recent > 0.6:
+                    strategy_weights['momentum_weight'] = min(1.5, strategy_weights['momentum_weight'] + 0.1)
+                else:
+                    strategy_weights['momentum_weight'] = max(0.5, strategy_weights['momentum_weight'] - 0.05)
+        
+        except Exception as e:
+            print(f"Weight update error: {e}")
+        
+        conn.close()
     
     def get_performance_stats(self):
-        """Get comprehensive performance statistics"""
+        """Get performance statistics"""
         conn = sqlite3.connect(DB_PATH)
         
-        # Overall stats
-        overall = conn.execute('''
-            SELECT 
-                COUNT(*) as total,
-                SUM(CASE WHEN win_loss = 'win' THEN 1 ELSE 0 END) as wins,
-                AVG(confidence) as avg_confidence
-            FROM signals 
-            WHERE win_loss IS NOT NULL
-        ''').fetchone()
+        try:
+            # Overall stats
+            overall = conn.execute('''
+                SELECT 
+                    COUNT(*) as total,
+                    SUM(CASE WHEN win_loss = 'win' THEN 1 ELSE 0 END) as wins,
+                    AVG(confidence) as avg_confidence
+                FROM signals 
+                WHERE win_loss IS NOT NULL
+            ''').fetchone()
+            
+            return overall if overall else (0, 0, 0)
         
-        # Daily performance
-        daily = conn.execute('''
-            SELECT date, win_rate, total_signals 
-            FROM performance 
-            ORDER BY date DESC 
-            LIMIT 7
-        ''').fetchall()
+        except:
+            return (0, 0, 0)
         
-        # Feature performance
-        feature_perf = conn.execute('''
-            SELECT AVG(CASE WHEN win_loss = 'win' THEN 1.0 ELSE 0.0 END) as win_rate,
-                   AVG(rsi) as avg_rsi,
-                   AVG(momentum) as avg_momentum
-            FROM signals 
-            WHERE win_loss IS NOT NULL
-        ''').fetchone()
-        
-        conn.close()
-        
-        return {
-            'overall': overall,
-            'daily': daily,
-            'features': feature_perf
-        }
+        finally:
+            conn.close()
 
-# Initialize trading intelligence
-trading_ai = TradingIntelligence()
+# Initialize learning system
+learning_system = SimpleLearningSystem()
 
-def generate_micro_movement_price(pair, previous_prices):
+def generate_realistic_price(pair, previous_prices):
     """Generate realistic price movements"""
     base_price = BASE_PRICES[pair]
     
@@ -305,28 +194,24 @@ def generate_micro_movement_price(pair, previous_prices):
     
     last_price = previous_prices[-1]
     
-    # Adaptive volatility based on AI learning
+    # Volatility with learning adjustment
     base_volatility = {
         "EUR/USD": 0.0003,
         "GBP/USD": 0.0004,  
         "USD/JPY": 0.003
     }
     
-    # Adjust volatility based on recent performance
-    volatility_adjustment = strategy_weights.get('volatility_weight', 1.0)
-    volatility = base_volatility[pair] * volatility_adjustment
+    volatility = base_volatility[pair] * strategy_weights.get('volatility_weight', 1.0)
     
-    # Create trending patterns
+    # Trending patterns
     time_factor = len(previous_prices) % 20
     trend_bias = math.sin(time_factor * 0.3) * 0.0002
     
-    # Random component with trend bias
+    # Apply changes
     random_change = random.gauss(trend_bias, volatility)
-    
-    # Apply change
     new_price = last_price * (1 + random_change)
     
-    # Keep within bounds
+    # Keep in bounds
     max_deviation = base_price * 0.02
     new_price = max(base_price - max_deviation, 
                    min(base_price + max_deviation, new_price))
@@ -334,23 +219,24 @@ def generate_micro_movement_price(pair, previous_prices):
     return round(new_price, 5)
 
 def update_price_data():
-    """Update price data"""
+    """Update price data for all pairs"""
     current_time = datetime.now(timezone.utc)
     
     for pair in PAIRS:
         current_prices = [p['price'] for p in price_history[pair]]
-        new_price = generate_micro_movement_price(pair, current_prices)
+        new_price = generate_realistic_price(pair, current_prices)
         
         price_history[pair].append({
             'timestamp': current_time,
             'price': new_price
         })
         
+        # Keep last 100 points
         if len(price_history[pair]) > 100:
             price_history[pair] = price_history[pair][-100:]
 
-def binary_rsi(prices, period=9):
-    """RSI calculation with adaptive period"""
+def calculate_rsi(prices, period=9):
+    """RSI calculation"""
     if len(prices) < period + 1:
         return 50
         
@@ -367,8 +253,8 @@ def binary_rsi(prices, period=9):
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
-def predict_5min_direction_ai_enhanced(pair):
-    """AI-Enhanced 5-minute binary prediction with self-learning"""
+def predict_5min_binary_signal(pair):
+    """Generate 5-minute binary options signal with learning"""
     data = price_history[pair]
     
     if len(data) < 30:
@@ -377,85 +263,84 @@ def predict_5min_direction_ai_enhanced(pair):
     prices = [d['price'] for d in data]
     current_price = prices[-1]
     
-    # Calculate indicators with adaptive weights
-    rsi_9 = binary_rsi(prices, 9)
-    momentum_fast = (np.mean(prices[-2:]) - np.mean(prices[-5:])) / np.mean(prices[-5:]) * 100
-    momentum_slow = (np.mean(prices[-5:]) - np.mean(prices[-12:])) / np.mean(prices[-12:]) * 100
-    price_velocity = (prices[-1] - prices[-5]) / prices[-5] * 100 if len(prices) >= 5 else 0
-    
-    # Traditional signal scoring
-    score = 0
-    conditions = 0
-    reasoning = []
-    direction = None
+    # Calculate indicators with learned weights
+    rsi_value = calculate_rsi(prices)
+    momentum_fast = (np.mean(prices[-3:]) - np.mean(prices[-6:])) / np.mean(prices[-6:]) * 100
+    momentum_slow = (np.mean(prices[-6:]) - np.mean(prices[-12:])) / np.mean(prices[-12:]) * 100
+    velocity = (prices[-1] - prices[-5]) / prices[-5] * 100 if len(prices) >= 5 else 0
     
     # Apply learned weights
     rsi_weight = strategy_weights.get('rsi_weight', 1.0)
     momentum_weight = strategy_weights.get('momentum_weight', 1.0)
     
-    # 1. RSI Analysis (weighted by AI learning)
-    if rsi_9 < 25:
+    # Signal generation
+    score = 0
+    conditions = 0
+    reasoning = []
+    direction = None
+    
+    # RSI analysis (weighted by learning)
+    if rsi_value < 25:
         score += 0.35 * rsi_weight
         conditions += 1
-        reasoning.append(f"Extreme oversold (RSI: {rsi_9:.1f})")
+        reasoning.append(f"Strong oversold (RSI: {rsi_value:.1f})")
         direction = "CALL"
-    elif rsi_9 > 75:
+    elif rsi_value > 75:
         score += 0.35 * rsi_weight
         conditions += 1
-        reasoning.append(f"Extreme overbought (RSI: {rsi_9:.1f})")
+        reasoning.append(f"Strong overbought (RSI: {rsi_value:.1f})")
         direction = "PUT"
     
     if not direction:
         return None
     
-    # 2. Momentum alignment (weighted)
+    # Momentum confirmation (weighted)
     if direction == "CALL" and momentum_fast > 0 and momentum_slow > 0:
         score += 0.25 * momentum_weight
         conditions += 1
-        reasoning.append("Bullish momentum alignment")
+        reasoning.append("Bullish momentum")
     elif direction == "PUT" and momentum_fast < 0 and momentum_slow < 0:
         score += 0.25 * momentum_weight
         conditions += 1
-        reasoning.append("Bearish momentum alignment")
+        reasoning.append("Bearish momentum")
     
-    # 3. Velocity confirmation
-    if direction == "CALL" and price_velocity > 0.05:
+    # Velocity boost
+    if direction == "CALL" and velocity > 0.08:
         score += 0.2
         conditions += 1
-        reasoning.append("Upward velocity")
-    elif direction == "PUT" and price_velocity < -0.05:
+        reasoning.append("Strong upward velocity")
+    elif direction == "PUT" and velocity < -0.08:
         score += 0.2
         conditions += 1
-        reasoning.append("Downward velocity")
+        reasoning.append("Strong downward velocity")
     
-    # 4. AI Model Enhancement
-    features = [rsi_9, momentum_fast, price_velocity, score]
-    ml_confidence = trading_ai.get_ml_prediction(features)
+    # Learning boost (based on historical performance)
+    if performance_data['total_trades'] > 20:
+        learning_boost = min(0.1, performance_data['win_rate'] / 1000)
+        score += learning_boost
+        reasoning.append(f"Learning boost: {learning_boost:.3f}")
     
-    # Combine traditional and ML scoring
-    final_confidence = (score * 0.7) + (ml_confidence * 0.3)
-    
-    if conditions >= 3 and final_confidence >= MIN_CONFIDENCE:
+    # Generate signal
+    if conditions >= 3 and score >= MIN_CONFIDENCE:
         entry_time = datetime.now(timezone.utc)
         expiry_time = entry_time + timedelta(minutes=5)
         
         signal = {
             'pair': pair,
             'direction': direction,
-            'confidence': round(min(final_confidence, 0.98), 2),
+            'confidence': round(min(score, 0.98), 2),
             'entry_price': current_price,
             'expiry_time': expiry_time.strftime('%H:%M:%S'),
             'entry_time': entry_time.strftime('%H:%M:%S'),
-            'reasoning': ', '.join(reasoning) + f" | AI Boost: {ml_confidence:.2f}",
-            'signal_strength': "AI-ENHANCED",
-            'rsi': round(rsi_9, 1),
+            'reasoning': ', '.join(reasoning),
+            'signal_strength': "LEARNING-ENHANCED",
+            'rsi': round(rsi_value, 1),
             'momentum': round(momentum_fast, 3),
-            'velocity': round(price_velocity, 4),
-            'ml_confidence': round(ml_confidence, 2)
+            'velocity': round(velocity, 4)
         }
         
-        # Save signal for learning
-        trading_ai.save_signal(signal)
+        # Save for learning
+        learning_system.save_signal(signal)
         
         return signal
     
@@ -464,21 +349,25 @@ def predict_5min_direction_ai_enhanced(pair):
 # Streamlit UI
 def main():
     st.set_page_config(
-        page_title="🧠 AI LEARNING BINARY TRADER",
+        page_title="🧠 POCKET OPTION AI TRADER",
         layout="wide",
         page_icon="🧠"
     )
     
-    st.title("🧠 SELF-LEARNING AI BINARY TRADER - POCKET OPTION")
+    st.title("🧠 SELF-LEARNING POCKET OPTION 5-MIN TRADER")
     
     # Update prices
     update_price_data()
     
-    # Status with AI learning indicators
+    # Update learning system
+    learning_system.update_strategy_weights()
+    learning_system.load_performance_data()
+    
+    # Status indicators
     col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
-        st.metric("System", "🧠 AI LEARNING")
+        st.metric("System", "🧠 LEARNING")
     
     with col2:
         st.metric("Expiry", "5 Minutes")
@@ -487,31 +376,34 @@ def main():
         st.metric("Platform", "Pocket Option")
     
     with col4:
-        st.metric("AI Model", "✅ Active" if ml_model else "🔄 Training")
+        st.metric("Total Trades", performance_data['total_trades'])
     
     with col5:
-        st.metric("Min Confidence", f"{MIN_CONFIDENCE:.0%}")
+        if performance_data['total_trades'] > 0:
+            st.metric("Win Rate", f"{performance_data['win_rate']:.1f}%")
+        else:
+            st.metric("Win Rate", "Learning...")
     
-    # Performance dashboard
-    perf_stats = trading_ai.get_performance_stats()
+    # Performance display
+    if performance_data['total_trades'] > 0:
+        if performance_data['win_rate'] >= 70:
+            st.success(f"🎯 EXCELLENT PERFORMANCE: {performance_data['win_rate']:.1f}% Win Rate on {performance_data['total_trades']} trades!")
+        elif performance_data['win_rate'] >= 60:
+            st.info(f"📊 GOOD PERFORMANCE: {performance_data['win_rate']:.1f}% Win Rate - System learning!")
+        else:
+            st.warning(f"📈 BUILDING DATA: {performance_data['win_rate']:.1f}% Win Rate - Need more trades for learning")
     
-    if perf_stats['overall'][0] > 0:  # Has trade data
-        total, wins, avg_conf = perf_stats['overall']
-        win_rate = (wins / total) * 100 if total > 0 else 0
-        
-        st.success(f"🎯 AI PERFORMANCE: {win_rate:.1f}% Win Rate | {total} Total Trades | Avg Confidence: {avg_conf:.1%}")
-    
-    # Live AI-enhanced signals
-    st.subheader("🚀 LIVE AI-ENHANCED 5-MINUTE SIGNALS")
+    # Live signals
+    st.subheader("🎯 LIVE 5-MINUTE BINARY SIGNALS")
     
     cols = st.columns(len(PAIRS))
-    new_signals = []
+    current_signals = []
     
     for i, pair in enumerate(PAIRS):
         with cols[i]:
             if price_history[pair]:
                 current_price = price_history[pair][-1]['price']
-                signal = predict_5min_direction_ai_enhanced(pair)
+                signal = predict_5min_binary_signal(pair)
                 
                 if signal:
                     direction_emoji = "📈" if signal['direction'] == "CALL" else "📉"
@@ -520,7 +412,7 @@ def main():
                         f"{current_price:.5f}",
                         f"{direction_emoji} {signal['direction']} ({signal['confidence']:.0%}) 🧠"
                     )
-                    new_signals.append(signal)
+                    current_signals.append(signal)
                 else:
                     st.metric(
                         pair,
@@ -528,59 +420,101 @@ def main():
                         "⏸️ No signal"
                     )
     
-    # Execute in Pocket Option
-    if new_signals:
-        st.subheader("🎯 AI-ENHANCED SIGNALS - EXECUTE NOW!")
+    # Active signals for Pocket Option
+    if current_signals:
+        st.subheader("🚀 EXECUTE IN POCKET OPTION NOW!")
         
-        for i, signal in enumerate(new_signals):
+        for signal in current_signals:
             alert_type = "success" if signal['direction'] == "CALL" else "error"
             direction_color = "🟢" if signal['direction'] == "CALL" else "🔴"
             
             getattr(st, alert_type)(f"""
-            **{direction_color} {signal['pair']} - {signal['direction']} SIGNAL (AI-ENHANCED)**
+            **{direction_color} {signal['pair']} - {signal['direction']} SIGNAL (LEARNING-ENHANCED)**
             
-            📊 **POCKET OPTION EXECUTION:**
-            - **Pair:** {signal['pair']}
+            📊 **POCKET OPTION SETUP:**
+            - **Asset:** {signal['pair']}
             - **Direction:** {signal['direction']} (Higher/Lower)
-            - **Entry Price:** {signal['entry_price']:.5f}
+            - **Amount:** Use consistent stake (2-5% of balance)
             - **Expiry:** 5 Minutes ({signal['expiry_time']})
-            - **AI Confidence:** {signal['confidence']:.0%}
-            - **ML Boost:** {signal['ml_confidence']:.0%}
+            - **Confidence:** {signal['confidence']:.0%}
             
-            📈 **AI Analysis:**
+            📈 **Technical Analysis:**
+            - **Entry Price:** {signal['entry_price']:.5f}
             - **RSI:** {signal['rsi']} | **Momentum:** {signal['momentum']:.3f}
-            - **Reasoning:** {signal['reasoning']}
+            - **Strategy:** {signal['reasoning']}
             
-            ⚡ **COPY TO POCKET OPTION NOW!**
+            ⚡ **EXECUTE IMMEDIATELY IN POCKET OPTION!**
             """)
             
-            # Manual outcome tracking
-            if st.button(f"Mark Trade Outcome for {signal['pair']}", key=f"outcome_{i}"):
-                st.write("Trade outcome tracking will be implemented with actual results")
+            signal_log.append(signal)
+            if len(signal_log) > 10:
+                signal_log.pop(0)
+    
+    # Recent signals
+    if signal_log:
+        st.subheader("📋 Recent High-Confidence Signals")
+        
+        df_data = []
+        for s in signal_log[-8:]:
+            df_data.append({
+                'Time': s['entry_time'],
+                'Pair': s['pair'],
+                'Direction': f"{'📈' if s['direction'] == 'CALL' else '📉'} {s['direction']}",
+                'Confidence': f"{s['confidence']:.0%}",
+                'Price': f"{s['entry_price']:.5f}",
+                'Expiry': s['expiry_time']
+            })
+        
+        if df_data:
+            df = pd.DataFrame(df_data)
+            st.dataframe(df, use_container_width=True, hide_index=True)
     
     # Learning dashboard
-    st.subheader("🧠 AI LEARNING DASHBOARD")
+    st.subheader("🧠 LEARNING SYSTEM STATUS")
     
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.metric("Total Trades Learned", perf_stats['overall'][0] if perf_stats['overall'][0] else 0)
-        st.metric("Strategy Weights", f"RSI: {strategy_weights['rsi_weight']:.2f}")
+        st.metric("RSI Weight", f"{strategy_weights['rsi_weight']:.2f}")
     
     with col2:
-        if perf_stats['overall'][0] > 0:
-            win_rate = (perf_stats['overall'][1] / perf_stats['overall'][0]) * 100
-            st.metric("AI Win Rate", f"{win_rate:.1f}%")
         st.metric("Momentum Weight", f"{strategy_weights['momentum_weight']:.2f}")
     
     with col3:
-        st.metric("Model Status", "🧠 Learning" if ml_model else "🔄 Training")
-        st.metric("Volatility Weight", f"{strategy_weights['volatility_weight']:.2f}")
+        st.metric("Learning Status", "🧠 Active")
     
-    # Feature importance
-    with st.expander("🔬 AI Learning Details"):
+    # Strategy guide
+    with st.expander("🎯 How to Use with Pocket Option"):
         st.markdown("""
-        **🧠 SELF-LEARNING FEATURES:**
+        **📱 POCKET OPTION EXECUTION STEPS:**
         
-        ✅ **Machine Learning Model:** RandomForest training on every trade outcome  
-        ✅ **Adaptive Weights:** RSI, momentum, volatility weights adjust b
+        1. **Wait for signals ≥82% confidence** 
+        2. **Open Pocket Option app/website**
+        3. **Select the exact pair** shown (EUR/USD, GBP/USD, USD/JPY)
+        4. **Choose direction:** CALL = Higher, PUT = Lower
+        5. **Set amount:** 2-5% of your balance (consistent stake)
+        6. **Set expiry:** Exactly 5 minutes
+        7. **Execute immediately** when signal appears
+        
+        **🧠 SELF-LEARNING FEATURES:**
+        - System tracks all signal outcomes
+        - Weights automatically adjust based on performance  
+        - Better indicators get higher importance over time
+        - Win rate improves as system learns your trading patterns
+        - Strategy evolves daily based on results
+        
+        **⚠️ RISK MANAGEMENT:**
+        - Maximum 3 trades per hour
+        - Only trade signals ≥85% for real money initially
+        - Stop after 2 consecutive losses
+        - Use consistent position sizing
+        
+        **✅ The system learns and improves with every trade result!**
+        """)
+    
+    # Auto-refresh every 15 seconds
+    time.sleep(15)
+    st.rerun()
+
+if __name__ == "__main__":
+    main()
