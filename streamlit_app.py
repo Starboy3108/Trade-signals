@@ -1,4 +1,4 @@
-# streamlit_app.py - OPTIMIZED FOR STREAMLIT CLOUD (ERROR-FREE)
+# streamlit_app.py - SYNTAX ERROR FIXED
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -519,9 +519,9 @@ def main():
     # Trading guide
     with st.expander("🎯 POCKET OPTION EXECUTION GUIDE"):
         st.markdown("""
-        ## 📱 **POCKET OPTION TRADING STEPS:**
+        ## 📱 POCKET OPTION TRADING STEPS:
         
-        ### 🚀 **EXECUTION PROCESS:**
+        ### 🚀 EXECUTION PROCESS:
         1. **Wait for Premium Signals** (💎 ULTIMATE, ⭐ PREMIUM, 💪 STRONG)
         2. **Open Pocket Option** app/website immediately  
         3. **Select Asset:** Choose exact pair (EUR/USD, GBP/USD, USD/JPY)
@@ -530,17 +530,18 @@ def main():
         6. **Set Expiry:** Exactly 5 minutes
         7. **Execute Trade:** Click immediately when signal appears
         
-        ### 🧠 **AI SYSTEM FEATURES:**
+        ### 🧠 AI SYSTEM FEATURES:
         - ✅ **Self-Learning:** Adapts strategy based on performance
         - ✅ **Quality Control:** Maximum 3 trades per hour for higher win rates  
         - ✅ **Multi-Confirmation:** 6 technical conditions analyzed
         - ✅ **Market Sessions:** Adapts to London/NY/Asian volatility
         - ✅ **Performance Tracking:** Complete database of results
         
-        ### 📊 **SIGNAL QUALITY LEVELS:**
+        ### 📊 SIGNAL QUALITY LEVELS:
         - **💎 ULTIMATE:** 90%+ confidence, extreme RSI conditions
         - **⭐ PREMIUM:** 85-89% confidence, strong multi-confirmation
         - **💪 STRONG:** 82-84% confidence, solid technical setup
         
-        ### ⚠️ **RISK MANAGEMENT:**
-        - **Trade Limit:** M
+        ### ⚠️ RISK MANAGEMENT:
+        - **Trade Limit:** Maximum 3 signals per hour (quality focus)
+  
