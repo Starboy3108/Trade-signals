@@ -1,113 +1,41 @@
-# ai_trader_24_7.py - Self-Learning 24/7 Trading AI
+# ai_trader_24_7.py - ERROR-SAFE VERSION
 import json
-import requests
-import pandas as pd
-import numpy as np
-from datetime import datetime, timezone, timedelta
-import os
-import pickle
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
-import re
-import time
+import sys
+from datetime import datetime, timezone
 
-# Configuration
-PAIRS = ["EUR/USD", "GBP/USD", "USD/JPY"]
-MIN_CONFIDENCE = 0.82
-MAX_SIGNALS_PER_HOUR = 3
-LEARNING_DATA_FILE = 'ai_learning_data.json'
-MODEL_FILE = 'trading_model.pkl'
-SIGNALS_FILE = 'live_signals.json'
-PERFORMANCE_FILE = 'performance_history.json'
-KNOWLEDGE_BASE_FILE = 'trading_knowledge.json'
+def safe_main():
+    """Error-safe main function with full logging"""
+    try:
+        print(f"🚀 AI Trading System Started: {datetime.now(timezone.utc)}")
+        
+        # Simple test signal generation (no external dependencies)
+        test_signal = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "pair": "EUR/USD",
+            "direction": "CALL",
+            "confidence": 0.85,
+            "entry_price": 1.0850,
+            "status": "test_mode"
+        }
+        
+        # Save to file
+        with open('signals.json', 'w') as f:
+            json.dump([test_signal], f, indent=2)
+        
+        print("✅ Test signal generated successfully")
+        print(f"Signal: {test_signal}")
+        
+        return 0  # Success
+        
+    except Exception as e:
+        print(f"❌ ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return 1  # Failure
 
-class SelfLearningTradingAI:
-    def __init__(self):
-        self.current_time = datetime.now(timezone.utc)
-        self.signals_generated_this_hour = 0
-        self.load_existing_data()
-        self.load_or_create_model()
-        self.strategy_weights = self.load_strategy_weights()
-        
-    def load_existing_data(self):
-        """Load all existing data files"""
-        # Load learning data
-        if os.path.exists(LEARNING_DATA_FILE):
-            with open(LEARNING_DATA_FILE, 'r') as f:
-                self.learning_data = json.load(f)
-        else:
-            self.learning_data = {
-                'completed_trades': [],
-                'market_patterns': [],
-                'successful_strategies': [],
-                'failed_strategies': []
-            }
-        
-        # Load signals history
-        if os.path.exists(SIGNALS_FILE):
-            with open(SIGNALS_FILE, 'r') as f:
-                self.signals_history = json.load(f)
-        else:
-            self.signals_history = []
-        
-        # Load performance history
-        if os.path.exists(PERFORMANCE_FILE):
-            with open(PERFORMANCE_FILE, 'r') as f:
-                self.performance_history = json.load(f)
-        else:
-            self.performance_history = []
-            
-        # Load trading knowledge base
-        if os.path.exists(KNOWLEDGE_BASE_FILE):
-            with open(KNOWLEDGE_BASE_FILE, 'r') as f:
-                self.knowledge_base = json.load(f)
-        else:
-            self.knowledge_base = {
-                'market_sessions': {
-                    'london': {'start': 8, 'end': 16, 'volatility': 1.3},
-                    'new_york': {'start': 13, 'end': 21, 'volatility': 1.5},
-                    'asian': {'start': 0, 'end': 6, 'volatility': 0.8}
-                },
-                'learned_patterns': [],
-                'pro_trader_insights': []
-            }
-    
-    def load_or_create_model(self):
-        """Load existing ML model or create new one"""
-        if os.path.exists(MODEL_FILE):
-            try:
-                with open(MODEL_FILE, 'rb') as f:
-                    self.model = pickle.load(f)
-                print("✅ Loaded existing AI model with learned patterns")
-            except:
-                self.model = RandomForestClassifier(n_estimators=100, random_state=42)
-                print("🧠 Created new AI model - will learn from scratch")
-        else:
-            self.model = RandomForestClassifier(n_estimators=100, random_state=42)
-            print("🧠 Created new AI model - will learn from scratch")
-    
-    def load_strategy_weights(self):
-        """Load adaptive strategy weights"""
-        if self.performance_history:
-            # Analyze recent performance to adjust weights
-            recent_performance = self.performance_history[-10:]  # Last 10 records
-            
-            if recent_performance:
-                avg_win_rate = np.mean([p['win_rate'] for p in recent_performance])
-                
-                # Adaptive weights based on performance
-                if avg_win_rate > 80:
-                    return {'rsi': 1.2, 'momentum': 1.1, 'volatility': 0.9, 'learning': 0.1}
-                elif avg_win_rate > 70:
-                    return {'rsi': 1.1, 'momentum': 1.0, 'volatility': 1.0, 'learning': 0.05}
-                else:
-                    return {'rsi': 0.9, 'momentum': 1.2, 'volatility': 1.1, 'learning': 0.0}
-        
-        # Default weights
-        return {'rsi': 1.0, 'momentum': 1.0, 'volatility': 1.0, 'learning': 0.0}
-    
-    def get_live_forex_data(self):
-        """Get live forex data from multiple sources"""
+if __name__ == "__main__":
+    exit_code = safe_main()
+    sys.exit(exit_code)
         forex_data = {}
         
         # Try multiple free APIs for reliability
