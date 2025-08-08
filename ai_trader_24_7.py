@@ -1,4 +1,4 @@
-# ai_trader_24_7.py - FIXED INDENTATION VERSION
+# ai_trader_24_7.py - INDENTATION FIXED
 import json
 import requests
 import pandas as pd
@@ -44,7 +44,7 @@ def get_forex_data():
     return forex_data
 
 def calculate_rsi(prices, period=14):
-    """Calculate RSI"""
+    """Calculate RSI with proper indentation"""
     if len(prices) < period + 1:
         return 50
     
@@ -108,6 +108,60 @@ def generate_signal(pair, price):
             "direction": direction,
             "confidence": round(min(score, 0.95), 2),
             "entry_price": round(price, 5),
+            "expiry_time": (current_time + timedelta(minutes=5)).isoformat(),
+            "reasoning": ", ".join(reasoning),
+            "rsi": round(rsi, 1),
+            "momentum": round(momentum, 4)
+        }
+    
+    return None
+
+def main():
+    """Main trading cycle"""
+    print(f"🚀 AI Trading Cycle: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    
+    # Get forex data
+    forex_data = get_forex_data()
+    print(f"📊 Retrieved data for {len(forex_data)} pairs")
+    
+    # Load existing signals
+    try:
+        with open('signals.json', 'r') as f:
+            signals_history = json.load(f)
+    except FileNotFoundError:
+        signals_history = []
+    
+    # Check hourly limit
+    current_hour = datetime.now(timezone.utc).strftime('%Y-%m-%d %H')
+    recent_signals = [s for s in signals_history if s.get('timestamp', '').startswith(current_hour)]
+    
+    if len(recent_signals) >= MAX_SIGNALS_PER_HOUR:
+        print(f"⏸️ Hourly limit reached: {len(recent_signals)}/{MAX_SIGNALS_PER_HOUR}")
+        return
+    
+    # Generate signals
+    new_signals = []
+    for pair, price in forex_data.items():
+        signal = generate_signal(pair, price)
+        if signal:
+            new_signals.append(signal)
+            print(f"🎯 {pair} - {signal['direction']} signal ({signal['confidence']:.0%})")
+    
+    # Update signals history
+    signals_history.extend(new_signals)
+    
+    # Keep last 1000 signals
+    if len(signals_history) > 1000:
+        signals_history = signals_history[-1000:]
+    
+    # Save signals
+    with open('signals.json', 'w') as f:
+        json.dump(signals_history, f, indent=2)
+    
+    print(f"✅ Generated {len(new_signals)} signals | Total: {len(signals_history)}")
+
+if __name__ == "__main__":
+    main()
             "expiry_time": (current_time + timedelta(minutes=5)).isoformat(),
             "reasoning": ", ".join(reasoning),
             "rsi": round(rsi, 1),
