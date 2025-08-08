@@ -4,7 +4,7 @@ import numpy as np
 from datetime import datetime, timezone, timedelta
 
 PAIRS = ["EUR/USD", "GBP/USD", "USD/JPY"]
-MIN_CONFIDENCE = 0.82
+MIN_CONFIDENCE = 0.75
 MAX_SIGNALS_PER_HOUR = 3
 
 def get_forex_data():
@@ -30,21 +30,28 @@ def get_forex_data():
 
 def generate_signal(pair, price):
     current_time = datetime.now(timezone.utc)
-    rsi = 50 + (hash(pair + str(current_time.hour)) % 60 - 30)
-    momentum = (hash(pair + str(current_time.minute)) % 200 - 100) / 1000
+    hour = current_time.hour
+    minute = current_time.minute
+    
+    base_rsi = 50
+    time_factor = (hour * 60 + minute) % 100
+    pair_factor = hash(pair) % 30
+    rsi = base_rsi + (time_factor - 50) * 0.4 + (pair_factor - 15)
+    
+    momentum = ((hash(str(current_time.minute) + pair) % 200) - 100) / 1000
     
     score = 0
     conditions = 0
     reasoning = []
     direction = None
     
-    if rsi < 30:
-        score += 0.4
+    if rsi < 40:
+        score += 0.35
         conditions += 1
         reasoning.append(f"Oversold RSI: {rsi:.1f}")
         direction = "CALL"
-    elif rsi > 70:
-        score += 0.4
+    elif rsi > 60:
+        score += 0.35
         conditions += 1
         reasoning.append(f"Overbought RSI: {rsi:.1f}")
         direction = "PUT"
@@ -52,18 +59,23 @@ def generate_signal(pair, price):
     if not direction:
         return None
     
-    if abs(momentum) > 0.05:
-        score += 0.25
+    if abs(momentum) > 0.03:
+        score += 0.2
         conditions += 1
         reasoning.append(f"Strong momentum: {momentum:.3f}")
     
-    if 8 <= current_time.hour <= 16 or 13 <= current_time.hour <= 21:
+    if 8 <= hour <= 16 or 13 <= hour <= 21:
         score += 0.15
         conditions += 1
         reasoning.append("Active trading session")
     
+    if minute % 15 == 0:
+        score += 0.1
+        conditions += 1
+        reasoning.append("High volatility period")
+    
     if conditions >= 2 and score >= MIN_CONFIDENCE:
-        signal_data = {
+        return {
             "timestamp": current_time.isoformat(),
             "pair": pair,
             "direction": direction,
@@ -72,9 +84,10 @@ def generate_signal(pair, price):
             "expiry_time": (current_time + timedelta(minutes=5)).isoformat(),
             "reasoning": ", ".join(reasoning),
             "rsi": round(rsi, 1),
-            "momentum": round(momentum, 4)
+            "momentum": round(momentum, 4),
+            "conditions_met": f"{conditions}/4"
         }
-        return signal_data
+    
     return None
 
 def main():
@@ -102,6 +115,8 @@ def main():
         if signal:
             new_signals.append(signal)
             print(f"🎯 {pair} - {signal['direction']} signal ({signal['confidence']:.0%})")
+        else:
+            print(f"❌ {pair} - No signal generated")
     
     signals_history.extend(new_signals)
     
@@ -115,62 +130,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-def check_signal_outcomes():
-    """Check outcomes of expired signals"""
-    try:
-        with open('signals.json', 'r') as f:
-            signals = json.load(f)
-    except FileNotFoundError:
-        return
-
-    current_time = datetime.now(timezone.utc)
-    updated_signals = []
-    
-    for signal in signals:
-        if signal.get('outcome_checked'):
-            updated_signals.append(signal)
-            continue
-            
-        expiry_time = datetime.fromisoformat(signal['expiry_time'].replace('Z', '+00:00'))
-        
-        # Check if signal has expired
-        if current_time > expiry_time:
-            # Get current price to determine outcome
-            current_forex_data = get_forex_data()
-            entry_price = signal['entry_price']
-            current_price = current_forex_data.get(signal['pair'], entry_price)
-            
-            # Determine win/loss
-            if signal['direction'] == 'CALL':
-                is_winner = current_price > entry_price
-            else:  # PUT
-                is_winner = current_price < entry_price
-            
-            # Update signal with outcome
-            signal['outcome'] = 'WIN' if is_winner else 'LOSS'
-            signal['exit_price'] = current_price
-            signal['outcome_checked'] = True
-            signal['profit_loss'] = 'PROFIT' if is_winner else 'LOSS'
-            
-        updated_signals.append(signal)
-    
-    # Save updated signals
-    with open('signals.json', 'w') as f:
-        json.dump(updated_signals, f, indent=2)
-                        is_winner = current_price > entry_price
-            else:  # PUT
-                is_winner = current_price < entry_price
-            
-            # Update signal with outcome
-            signal['outcome'] = 'WIN' if is_winner else 'LOSS'
-            signal['exit_price'] = current_price
-            signal['outcome_checked'] = True
-            signal['profit_loss'] = 'PROFIT' if is_winner else 'LOSS'
-            
-        updated_signals.append(signal)
-    
-    # Save updated signals
-    with open('signals.json', 'w') as f:
-        json.dump(updated_signals, f, indent=2)
-        
