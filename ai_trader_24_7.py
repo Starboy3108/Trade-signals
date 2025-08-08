@@ -1,10 +1,8 @@
-# ai_trader_24_7.py - INDENTATION ERROR FIXED
 import json
 import requests
-import pandas as pd
 import numpy as np
 from datetime import datetime, timezone, timedelta
-import os
+import random
 
 # Configuration
 PAIRS = ["EUR/USD", "GBP/USD", "USD/JPY"]
@@ -63,7 +61,6 @@ def generate_signal(pair, price):
     """Generate binary options signal"""
     current_time = datetime.now(timezone.utc)
     
-    # Simulate realistic indicators
     rsi = 50 + (hash(pair + str(current_time.hour)) % 60 - 30)
     momentum = (hash(pair + str(current_time.minute)) % 200 - 100) / 1000
     
@@ -72,7 +69,6 @@ def generate_signal(pair, price):
     reasoning = []
     direction = None
     
-    # RSI-based signals
     if rsi < 30:
         score += 0.4
         conditions += 1
@@ -87,13 +83,11 @@ def generate_signal(pair, price):
     if not direction:
         return None
     
-    # Additional confirmations
     if abs(momentum) > 0.05:
         score += 0.25
         conditions += 1
         reasoning.append(f"Strong momentum: {momentum:.3f}")
     
-    # Market session bonus
     if 8 <= current_time.hour <= 16 or 13 <= current_time.hour <= 21:
         score += 0.15
         conditions += 1
@@ -110,6 +104,49 @@ def generate_signal(pair, price):
             "reasoning": ", ".join(reasoning),
             "rsi": round(rsi, 1),
             "momentum": round(momentum, 4)
+        }
+    
+    return None
+
+def main():
+    """Main trading cycle"""
+    print(f"🚀 AI Trading Cycle: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    
+    forex_data = get_forex_data()
+    print(f"📊 Retrieved data for {len(forex_data)} pairs")
+    
+    try:
+        with open('signals.json', 'r') as f:
+            signals_history = json.load(f)
+    except FileNotFoundError:
+        signals_history = []
+    
+    current_hour = datetime.now(timezone.utc).strftime('%Y-%m-%d %H')
+    recent_signals = [s for s in signals_history if s.get('timestamp', '').startswith(current_hour)]
+    
+    if len(recent_signals) >= MAX_SIGNALS_PER_HOUR:
+        print(f"⏸️ Hourly limit reached: {len(recent_signals)}/{MAX_SIGNALS_PER_HOUR}")
+        return
+    
+    new_signals = []
+    for pair, price in forex_data.items():
+        signal = generate_signal(pair, price)
+        if signal:
+            new_signals.append(signal)
+            print(f"🎯 {pair} - {signal['direction']} signal ({signal['confidence']:.0%})")
+    
+    signals_history.extend(new_signals)
+    
+    if len(signals_history) > 1000:
+        signals_history = signals_history[-1000:]
+    
+    with open('signals.json', 'w') as f:
+        json.dump(signals_history, f, indent=2)
+    
+    print(f"✅ Generated {len(new_signals)} signals | Total: {len(signals_history)}")
+
+if __name__ == "__main__":
+    main()
         }
     
     return None
