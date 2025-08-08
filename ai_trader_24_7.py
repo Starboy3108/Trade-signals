@@ -114,6 +114,12 @@ def main():
 
 if __name__ == "__main__":
     main()
+        json.dump(signals_history, f, indent=2)
+    
+    print(f"✅ Generated {len(new_signals)} signals | Total: {len(signals_history)}")
+
+if __name__ == "__main__":
+    main()
     if len(signals_history) > 1000:
         signals_history = signals_history[-1000:]
     
