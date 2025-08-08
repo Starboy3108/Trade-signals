@@ -188,6 +188,86 @@ def main():
 
 if __name__ == "__main__":
     main()
+    if minute % 10 == 0:
+        score += 0.1
+        conditions += 1
+        reasoning.append("Pattern-based entry")
+    
+    if conditions >= 2 and score >= MIN_CONFIDENCE:
+        return {
+            "timestamp": current_time.isoformat(),
+            "pair": pair,
+            "direction": direction,
+            "confidence": round(min(score, 0.95), 2),
+            "entry_price": round(price, 5),
+            "expiry_time": (current_time + timedelta(minutes=5)).isoformat(),
+            "reasoning": ", ".join(reasoning),
+            "rsi": round(rsi, 1),
+            "momentum": round(momentum, 4),
+            "volatility": round(volatility, 2),
+            "conditions_met": f"{conditions}/6",
+            "weekend_mode": weekday >= 5
+        }
+    
+    return None
+
+def main():
+    current_time = datetime.now(timezone.utc)
+    print(f"🚀 AI Trading Cycle: {current_time.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    
+    forex_data = get_forex_data()
+    print(f"📊 Retrieved data for {len(forex_data)} pairs")
+    for pair, price in forex_data.items():
+        print(f"   {pair}: {price:.5f}")
+    
+    try:
+        with open('signals.json', 'r') as f:
+            signals_history = json.load(f)
+    except FileNotFoundError:
+        signals_history = []
+    
+    current_hour = current_time.strftime('%Y-%m-%d %H')
+    recent_signals = [s for s in signals_history if s.get('timestamp', '').startswith(current_hour)]
+    
+    if len(recent_signals) >= MAX_SIGNALS_PER_HOUR:
+        print(f"⏸️ Hourly limit reached: {len(recent_signals)}/{MAX_SIGNALS_PER_HOUR}")
+        return
+    
+    new_signals = []
+    for pair, price in forex_data.items():
+        print(f"🔍 Analyzing {pair} at {price:.5f}...")
+        signal = generate_signal(pair, price)
+        if signal:
+            new_signals.append(signal)
+            print(f"🎯 SIGNAL GENERATED!")
+            print(f"   {pair} - {signal['direction']} ({signal['confidence']:.0%})")
+            print(f"   RSI: {signal['rsi']}, Conditions: {signal['conditions_met']}")
+            print(f"   Reasoning: {signal['reasoning']}")
+        else:
+            print(f"❌ {pair} - No signal (conditions not met)")
+    
+    signals_history.extend(new_signals)
+    
+    if len(signals_history) > 1000:
+        signals_history = signals_history[-1000:]
+    
+    with open('signals.json', 'w') as f:
+        json.dump(signals_history, f, indent=2)
+    
+    print(f"✅ Generated {len(new_signals)} signals | Total: {len(signals_history)}")
+    
+    weekday = current_time.weekday()
+    if weekday >= 5:
+        print(f"📅 Weekend Mode Active - Enhanced signal generation enabled")
+    
+    if signals_history:
+        recent_count = min(3, len(signals_history))
+        print(f"📋 Last {recent_count} signals:")
+        for i, sig in enumerate(signals_history[-recent_count:], 1):
+            print(f"   {i}. {sig['pair']} {sig['direction']} ({sig['confidence']:.0%}) - {sig['timestamp'][11:19]} UTC")
+
+if __name__ == "__main__":
+    main()
         reasoning.append("London session active")
     elif 13 <= hour <= 21:  # New York session
         score += 0.2
