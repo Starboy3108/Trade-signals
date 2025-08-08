@@ -115,3 +115,47 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+def check_signal_outcomes():
+    """Check outcomes of expired signals"""
+    try:
+        with open('signals.json', 'r') as f:
+            signals = json.load(f)
+    except FileNotFoundError:
+        return
+
+    current_time = datetime.now(timezone.utc)
+    updated_signals = []
+    
+    for signal in signals:
+        if signal.get('outcome_checked'):
+            updated_signals.append(signal)
+            continue
+            
+        expiry_time = datetime.fromisoformat(signal['expiry_time'].replace('Z', '+00:00'))
+        
+        # Check if signal has expired
+        if current_time > expiry_time:
+            # Get current price to determine outcome
+            current_forex_data = get_forex_data()
+            entry_price = signal['entry_price']
+            current_price = current_forex_data.get(signal['pair'], entry_price)
+            
+            # Determine win/loss
+            if signal['direction'] == 'CALL':
+                is_winner = current_price > entry_price
+            else:  # PUT
+                is_winner = current_price < entry_price
+            
+            # Update signal with outcome
+            signal['outcome'] = 'WIN' if is_winner else 'LOSS'
+            signal['exit_price'] = current_price
+            signal['outcome_checked'] = True
+            signal['profit_loss'] = 'PROFIT' if is_winner else 'LOSS'
+            
+        updated_signals.append(signal)
+    
+    # Save updated signals
+    with open('signals.json', 'w') as f:
+        json.dump(updated_signals, f, indent=2)
+        
