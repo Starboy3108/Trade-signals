@@ -158,4 +158,19 @@ def check_signal_outcomes():
     # Save updated signals
     with open('signals.json', 'w') as f:
         json.dump(updated_signals, f, indent=2)
+                        is_winner = current_price > entry_price
+            else:  # PUT
+                is_winner = current_price < entry_price
+            
+            # Update signal with outcome
+            signal['outcome'] = 'WIN' if is_winner else 'LOSS'
+            signal['exit_price'] = current_price
+            signal['outcome_checked'] = True
+            signal['profit_loss'] = 'PROFIT' if is_winner else 'LOSS'
+            
+        updated_signals.append(signal)
+    
+    # Save updated signals
+    with open('signals.json', 'w') as f:
+        json.dump(updated_signals, f, indent=2)
         
