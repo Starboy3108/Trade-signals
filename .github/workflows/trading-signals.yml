@@ -1,15 +1,21 @@
-name: 24/7 Self-Learning Trading AI
+name: 24/7 AI Trading Signals
 on:
   schedule:
-    - cron: '*/5 * * * *'
-  workflow_dispatch:
+    - cron: '*/5 * * * *'  # Every 5 minutes
+  workflow_dispatch:  # Manual trigger
+  push:  # Trigger on push to keep repository active
+    branches: [ main ]
 
 jobs:
   generate-trading-signals:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Allow writing to repository
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
         
       - name: Setup Python
         uses: actions/setup-python@v4
@@ -18,7 +24,7 @@ jobs:
           
       - name: Install Dependencies
         run: |
-          pip install pandas numpy requests scikit-learn
+          pip install pandas numpy requests
           
       - name: Generate AI Trading Signals
         run: python ai_trader_24_7.py
@@ -28,5 +34,9 @@ jobs:
           git config --local user.email "ai-trader@github.com"
           git config --local user.name "AI Trader Bot"
           git add -A
-          git diff --staged --quiet || git commit -m "🤖 AI Trading Update: $(date)"
-          git push
+          if ! git diff --staged --quiet; then
+            git commit -m "🤖 AI Trading Update: $(date)"
+            git push
+          else
+            echo "No changes to commit"
+          fi
