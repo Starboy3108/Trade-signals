@@ -2,15 +2,16 @@ name: 24/7 AI Trading Signals
 on:
   schedule:
     - cron: '*/5 * * * *'  # Every 5 minutes
-  workflow_dispatch:  # Manual trigger
-  push:  # Trigger on push to keep repository active
+    - cron: '0 * * * *'    # Every hour (backup)
+  workflow_dispatch:
+  push:
     branches: [ main ]
 
 jobs:
   generate-trading-signals:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # Allow writing to repository
+      contents: write
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -29,14 +30,8 @@ jobs:
       - name: Generate AI Trading Signals
         run: python ai_trader_24_7.py
         
-      - name: Commit and Push Results
+      - name: Display Results
         run: |
-          git config --local user.email "ai-trader@github.com"
-          git config --local user.name "AI Trader Bot"
-          git add -A
-          if ! git diff --staged --quiet; then
-            git commit -m "🤖 AI Trading Update: $(date)"
-            git push
-          else
-            echo "No changes to commit"
-          fi
+          echo "=== LATEST SIGNALS ==="
+          cat signals.json 2>/dev/null || echo "No signals file found"
+          echo "=== END SIGNALS ==="
