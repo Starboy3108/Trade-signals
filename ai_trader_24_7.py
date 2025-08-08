@@ -25,11 +25,7 @@ def get_forex_data():
             data = response.json()
             forex_data["USD/JPY"] = data["rates"]["JPY"]
     except:
-        forex_data = {
-            "EUR/USD": 1.0850,
-            "GBP/USD": 1.2750,
-            "USD/JPY": 150.25
-        }
+        forex_data = {"EUR/USD": 1.0850, "GBP/USD": 1.2750, "USD/JPY": 150.25}
     return forex_data
 
 def generate_signal(pair, price):
@@ -108,6 +104,16 @@ def main():
     
     signals_history.extend(new_signals)
     
+    if len(signals_history) > 1000:
+        signals_history = signals_history[-1000:]
+    
+    with open('signals.json', 'w') as f:
+        json.dump(signals_history, f, indent=2)
+    
+    print(f"✅ Generated {len(new_signals)} signals | Total: {len(signals_history)}")
+
+if __name__ == "__main__":
+    main()
     if len(signals_history) > 1000:
         signals_history = signals_history[-1000:]
     
