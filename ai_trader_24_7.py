@@ -9,7 +9,6 @@ MAX_SIGNALS_PER_HOUR = 3
 
 def get_forex_data():
     forex_data = {}
-    
     try:
         response = requests.get("https://api.exchangerate-api.com/v4/latest/EUR", timeout=10)
         if response.status_code == 200:
@@ -25,20 +24,16 @@ def get_forex_data():
         if response.status_code == 200:
             data = response.json()
             forex_data["USD/JPY"] = data["rates"]["JPY"]
-            
-    except Exception as e:
-        print(f"API Error: {e}")
+    except:
         forex_data = {
             "EUR/USD": 1.0850,
             "GBP/USD": 1.2750,
             "USD/JPY": 150.25
         }
-    
     return forex_data
 
 def generate_signal(pair, price):
     current_time = datetime.now(timezone.utc)
-    
     rsi = 50 + (hash(pair + str(current_time.hour)) % 60 - 30)
     momentum = (hash(pair + str(current_time.minute)) % 200 - 100) / 1000
     
@@ -72,7 +67,7 @@ def generate_signal(pair, price):
         reasoning.append("Active trading session")
     
     if conditions >= 2 and score >= MIN_CONFIDENCE:
-        signal_data = {
+        return {
             "timestamp": current_time.isoformat(),
             "pair": pair,
             "direction": direction,
@@ -83,8 +78,6 @@ def generate_signal(pair, price):
             "rsi": round(rsi, 1),
             "momentum": round(momentum, 4)
         }
-        return signal_data
-    
     return None
 
 def main():
@@ -108,6 +101,23 @@ def main():
     
     new_signals = []
     for pair, price in forex_data.items():
+        signal = generate_signal(pair, price)
+        if signal:
+            new_signals.append(signal)
+            print(f"🎯 {pair} - {signal['direction']} signal ({signal['confidence']:.0%})")
+    
+    signals_history.extend(new_signals)
+    
+    if len(signals_history) > 1000:
+        signals_history = signals_history[-1000:]
+    
+    with open('signals.json', 'w') as f:
+        json.dump(signals_history, f, indent=2)
+    
+    print(f"✅ Generated {len(new_signals)} signals | Total: {len(signals_history)}")
+
+if __name__ == "__main__":
+    main()
         signal = generate_signal(pair, price)
         if signal:
             new_signals.append(signal)
