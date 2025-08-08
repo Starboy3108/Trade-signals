@@ -1,113 +1,34 @@
 import json
 import requests
-import numpy as np
 from datetime import datetime, timezone, timedelta
-import hashlib
 
-PAIRS = ["EUR/USD", "GBP/USD", "USD/JPY"]
-MIN_CONFIDENCE = 0.70
-MAX_SIGNALS_PER_HOUR = 3
-
-def get_forex_data():
-    forex_data = {}
-    try:
-        response = requests.get("https://api.exchangerate-api.com/v4/latest/EUR", timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            forex_data["EUR/USD"] = data["rates"]["USD"]
-        
-        response = requests.get("https://api.exchangerate-api.com/v4/latest/GBP", timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            forex_data["GBP/USD"] = data["rates"]["USD"]
-            
-        response = requests.get("https://api.exchangerate-api.com/v4/latest/USD", timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            forex_data["USD/JPY"] = data["rates"]["JPY"]
-            
-        print("✅ Live forex data retrieved successfully")
-    except Exception as e:
-        print(f"⚠️ API Error: {e}")
-        base_prices = {"EUR/USD": 1.0850, "GBP/USD": 1.2750, "USD/JPY": 150.25}
-        current_time = datetime.now(timezone.utc)
-        
-        for pair, base_price in base_prices.items():
-            seed = int(hashlib.md5(f"{pair}{current_time.hour}{current_time.minute}".encode()).hexdigest()[:8], 16)
-            variation = (seed % 200 - 100) / 10000
-            forex_data[pair] = base_price * (1 + variation)
+def main():
+    print("🚀 AI Trading System Started")
     
-    return forex_data
-
-def generate_signal(pair, price):
+    # Simple signal generation
     current_time = datetime.now(timezone.utc)
-    hour = current_time.hour
-    minute = current_time.minute
     
-    time_seed = hour * 100 + minute
-    pair_hash = int(hashlib.md5(pair.encode()).hexdigest()[:8], 16)
+    # Generate test signal
+    signal = {
+        "timestamp": current_time.isoformat(),
+        "pair": "EUR/USD",
+        "direction": "CALL",
+        "confidence": 0.85,
+        "entry_price": 1.0850,
+        "expiry_time": (current_time + timedelta(minutes=5)).isoformat(),
+        "reasoning": "Test signal generated successfully"
+    }
     
-    rsi_base = 50
-    rsi_variation = ((time_seed + pair_hash) % 80) - 40
-    rsi = max(10, min(90, rsi_base + rsi_variation))
+    # Save to file
+    signals = [signal]
+    with open('signals.json', 'w') as f:
+        json.dump(signals, f, indent=2)
     
-    momentum_seed = (time_seed * pair_hash) % 1000
-    momentum = (momentum_seed - 500) / 2500
-    
-    volatility = 0.8 + ((time_seed + pair_hash) % 40) / 100
-    
-    score = 0
-    conditions = 0
-    reasoning = []
-    direction = None
-    
-    if rsi < 45:
-        score += 0.3
-        conditions += 1
-        reasoning.append(f"Oversold RSI: {rsi:.1f}")
-        direction = "CALL"
-    elif rsi > 55:
-        score += 0.3
-        conditions += 1
-        reasoning.append(f"Overbought RSI: {rsi:.1f}")
-        direction = "PUT"
-    
-    if not direction:
-        return None
-    
-    if direction == "CALL" and momentum > -0.1:
-        score += 0.2
-        conditions += 1
-        reasoning.append(f"Favorable momentum: {momentum:.3f}")
-    elif direction == "PUT" and momentum < 0.1:
-        score += 0.2
-        conditions += 1
-        reasoning.append(f"Favorable momentum: {momentum:.3f}")
-    
-    if volatility > 0.9:
-        score += 0.15
-        conditions += 1
-        reasoning.append("Market volatility detected")
-    
-    weekday = current_time.weekday()
-    
-    if weekday >= 5:
-        score += 0.2
-        conditions += 1
-        reasoning.append("Weekend trading opportunity")
-    elif 8 <= hour <= 16:
-        score += 0.15
-        conditions += 1
-        reasoning.append("London session active")
-    elif 13 <= hour <= 21:
-        score += 0.2
-        conditions += 1
-        reasoning.append("New York session active")
-    else:
-        score += 0.1
-        conditions += 1
-        reasoning.append("Off-hours opportunity")
-    
+    print(f"✅ Generated 1 test signal")
+    print(f"Signal: {signal['pair']} {signal['direction']} ({signal['confidence']:.0%})")
+
+if __name__ == "__main__":
+    main()
     if minute % 10 == 0:
         score += 0.1
         conditions += 1
