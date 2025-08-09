@@ -4,7 +4,7 @@ import numpy as np
 from datetime import datetime, timezone, timedelta
 
 PAIRS = ["EUR/USD", "GBP/USD", "USD/JPY"]
-MIN_CONFIDENCE = 0.75
+MIN_CONFIDENCE = 0.75  # Changed from 0.82 - CHANGE 1
 MAX_SIGNALS_PER_HOUR = 3
 
 def get_forex_data():
@@ -38,12 +38,12 @@ def generate_signal(pair, price):
     reasoning = []
     direction = None
     
-    if rsi < 35:
+    if rsi < 35:  # Changed from 30 - CHANGE 2
         score += 0.4
         conditions += 1
         reasoning.append(f"Oversold RSI: {rsi:.1f}")
         direction = "CALL"
-    elif rsi > 65:
+    elif rsi > 65:  # Changed from 70 - CHANGE 3
         score += 0.4
         conditions += 1
         reasoning.append(f"Overbought RSI: {rsi:.1f}")
@@ -52,7 +52,7 @@ def generate_signal(pair, price):
     if not direction:
         return None
     
-    if abs(momentum) > 0.03:
+    if abs(momentum) > 0.03:  # Changed from 0.05 - CHANGE 4
         score += 0.25
         conditions += 1
         reasoning.append(f"Strong momentum: {momentum:.3f}")
@@ -108,6 +108,13 @@ def main():
     if len(signals_history) > 1000:
         signals_history = signals_history[-1000:]
     
+    with open('signals.json', 'w') as f:
+        json.dump(signals_history, f, indent=2)
+    
+    print(f"✅ Generated {len(new_signals)} signals | Total: {len(signals_history)}")
+
+if __name__ == "__main__":
+    main()
     with open('signals.json', 'w') as f:
         json.dump(signals_history, f, indent=2)
     
