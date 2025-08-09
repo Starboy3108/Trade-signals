@@ -129,6 +129,13 @@ if __name__ == "__main__":
 
 if __name__ == "__main__":
     main()
+    with open('signals.json', 'w') as f:
+        json.dump(signals_history, f, indent=2)
+    
+    print(f"✅ Generated {len(new_signals)} signals | Total: {len(signals_history)}")
+
+if __name__ == "__main__":
+    main()
         score += 0.25
         conditions += 1
         reasoning.append(f"Strong momentum: {momentum:.3f}")
