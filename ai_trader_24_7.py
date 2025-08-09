@@ -4,7 +4,7 @@ import numpy as np
 from datetime import datetime, timezone, timedelta
 
 PAIRS = ["EUR/USD", "GBP/USD", "USD/JPY"]
-MIN_CONFIDENCE = 0.75  # Changed from 0.82
+MIN_CONFIDENCE = 0.75  # Changed from 0.82 - CHANGE 1
 MAX_SIGNALS_PER_HOUR = 3
 
 def get_forex_data():
@@ -38,12 +38,12 @@ def generate_signal(pair, price):
     reasoning = []
     direction = None
     
-    if rsi < 35:  # Changed from 30
+    if rsi < 35:  # Changed from 30 - CHANGE 2
         score += 0.4
         conditions += 1
         reasoning.append(f"Oversold RSI: {rsi:.1f}")
         direction = "CALL"
-    elif rsi > 65:  # Changed from 70
+    elif rsi > 65:  # Changed from 70 - CHANGE 3
         score += 0.4
         conditions += 1
         reasoning.append(f"Overbought RSI: {rsi:.1f}")
@@ -52,7 +52,7 @@ def generate_signal(pair, price):
     if not direction:
         return None
     
-    if abs(momentum) > 0.03:  # Changed from 0.05
+    if abs(momentum) > 0.03:  # Changed from 0.05 - CHANGE 4
         score += 0.25
         conditions += 1
         reasoning.append(f"Strong momentum: {momentum:.3f}")
@@ -102,39 +102,6 @@ def main():
         if signal:
             new_signals.append(signal)
             print(f"🎯 {pair} - {signal['direction']} signal ({signal['confidence']:.0%})")
-    
-    signals_history.extend(new_signals)
-    
-    if len(signals_history) > 1000:
-        signals_history = signals_history[-1000:]
-    
-    with open('signals.json', 'w') as f:
-        json.dump(signals_history, f, indent=2)
-    
-    print(f"✅ Generated {len(new_signals)} signals | Total: {len(signals_history)}")
-
-if __name__ == "__main__":
-    main()
-    except FileNotFoundError:
-        signals_history = []
-    
-    current_hour = datetime.now(timezone.utc).strftime('%Y-%m-%d %H')
-    recent_signals = [s for s in signals_history if s.get('timestamp', '').startswith(current_hour)]
-    
-    if len(recent_signals) >= MAX_SIGNALS_PER_HOUR:
-        print(f"⏸️ Hourly limit reached: {len(recent_signals)}/{MAX_SIGNALS_PER_HOUR}")
-        return
-    
-    new_signals = []
-    for pair, price in forex_data.items():
-        print(f"🔍 Analyzing {pair}...")
-        signal = generate_signal(pair, price)
-        if signal:
-            new_signals.append(signal)
-            print(f"🎯 {pair} - {signal['direction']} signal ({signal['confidence']:.0%})")
-            print(f"   Reasoning: {signal['reasoning']}")
-        else:
-            print(f"❌ {pair} - No signal generated")
     
     signals_history.extend(new_signals)
     
