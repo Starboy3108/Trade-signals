@@ -4,7 +4,7 @@ import numpy as np
 from datetime import datetime, timezone, timedelta
 
 PAIRS = ["EUR/USD", "GBP/USD", "USD/JPY"]
-MIN_CONFIDENCE = 0.75  # Lowered from 0.82 for more signals
+MIN_CONFIDENCE = 0.75  # Changed from 0.82
 MAX_SIGNALS_PER_HOUR = 3
 
 def get_forex_data():
@@ -38,13 +38,12 @@ def generate_signal(pair, price):
     reasoning = []
     direction = None
     
-    # Enhanced RSI conditions (more flexible)
-    if rsi < 35:  # Changed from 30 to 35
+    if rsi < 35:  # Changed from 30
         score += 0.4
         conditions += 1
         reasoning.append(f"Oversold RSI: {rsi:.1f}")
         direction = "CALL"
-    elif rsi > 65:  # Changed from 70 to 65
+    elif rsi > 65:  # Changed from 70
         score += 0.4
         conditions += 1
         reasoning.append(f"Overbought RSI: {rsi:.1f}")
@@ -53,33 +52,15 @@ def generate_signal(pair, price):
     if not direction:
         return None
     
-    # More lenient momentum threshold
-    if abs(momentum) > 0.03:  # Changed from 0.05 to 0.03
+    if abs(momentum) > 0.03:  # Changed from 0.05
         score += 0.25
         conditions += 1
         reasoning.append(f"Strong momentum: {momentum:.3f}")
     
-    # Enhanced trading session logic
-    hour = current_time.hour
-    if 8 <= hour <= 16:
-        score += 0.20  # London session bonus
+    if 8 <= current_time.hour <= 16 or 13 <= current_time.hour <= 21:
+        score += 0.15
         conditions += 1
-        reasoning.append("London session active")
-    elif 13 <= hour <= 21:
-        score += 0.25  # New York session bonus
-        conditions += 1
-        reasoning.append("New York session active")
-    elif hour <= 6 or hour >= 22:
-        score += 0.15  # Asian session bonus
-        conditions += 1
-        reasoning.append("Asian session active")
-    
-    # Additional pattern-based signals
-    minute = current_time.minute
-    if minute % 15 == 0:  # Every 15 minutes
-        score += 0.10
-        conditions += 1
-        reasoning.append("Pattern timing")
+        reasoning.append("Active trading session")
     
     if conditions >= 2 and score >= MIN_CONFIDENCE:
         signal_data = {
@@ -91,8 +72,7 @@ def generate_signal(pair, price):
             "expiry_time": (current_time + timedelta(minutes=5)).isoformat(),
             "reasoning": ", ".join(reasoning),
             "rsi": round(rsi, 1),
-            "momentum": round(momentum, 4),
-            "conditions_met": f"{conditions}/5"
+            "momentum": round(momentum, 4)
         }
         return signal_data
     return None
@@ -102,12 +82,39 @@ def main():
     
     forex_data = get_forex_data()
     print(f"📊 Retrieved data for {len(forex_data)} pairs")
-    for pair, price in forex_data.items():
-        print(f"   {pair}: {price:.5f}")
     
     try:
         with open('signals.json', 'r') as f:
             signals_history = json.load(f)
+    except FileNotFoundError:
+        signals_history = []
+    
+    current_hour = datetime.now(timezone.utc).strftime('%Y-%m-%d %H')
+    recent_signals = [s for s in signals_history if s.get('timestamp', '').startswith(current_hour)]
+    
+    if len(recent_signals) >= MAX_SIGNALS_PER_HOUR:
+        print(f"⏸️ Hourly limit reached: {len(recent_signals)}/{MAX_SIGNALS_PER_HOUR}")
+        return
+    
+    new_signals = []
+    for pair, price in forex_data.items():
+        signal = generate_signal(pair, price)
+        if signal:
+            new_signals.append(signal)
+            print(f"🎯 {pair} - {signal['direction']} signal ({signal['confidence']:.0%})")
+    
+    signals_history.extend(new_signals)
+    
+    if len(signals_history) > 1000:
+        signals_history = signals_history[-1000:]
+    
+    with open('signals.json', 'w') as f:
+        json.dump(signals_history, f, indent=2)
+    
+    print(f"✅ Generated {len(new_signals)} signals | Total: {len(signals_history)}")
+
+if __name__ == "__main__":
+    main()
     except FileNotFoundError:
         signals_history = []
     
