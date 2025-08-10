@@ -37,31 +37,34 @@ def check_expired_signals(signals_history, current_forex_data):
             updated_signals.append(signal)
             continue
             
-        expiry_time = datetime.fromisoformat(signal['expiry_time'].replace('+00:00', ''))
-        expiry_time = expiry_time.replace(tzinfo=timezone.utc)
-        
-        if current_time >= expiry_time:
-            pair = signal['pair']
-            entry_price = signal['entry_price']
-            direction = signal['direction']
-            current_price = current_forex_data.get(pair, entry_price)
+        try:
+            expiry_str = signal['expiry_time'].replace('+00:00', '').replace('Z', '')
+            expiry_time = datetime.fromisoformat(expiry_str).replace(tzinfo=timezone.utc)
             
-            if direction == "CALL":
-                is_winner = current_price > entry_price
-            else:
-                is_winner = current_price < entry_price
-            
-            price_change = current_price - entry_price
-            price_change_pct = (price_change / entry_price) * 100
-            
-            signal['outcome'] = 'WIN' if is_winner else 'LOSS'
-            signal['exit_price'] = round(current_price, 5)
-            signal['price_change'] = round(price_change, 5)
-            signal['price_change_pct'] = round(price_change_pct, 3)
-            signal['outcome_checked'] = True
-            signal['checked_at'] = current_time.isoformat()
-            
-            print(f"📊 {pair} {direction} - {'WIN ✅' if is_winner else 'LOSS ❌'} ({price_change_pct:+.2f}%)")
+            if current_time >= expiry_time:
+                pair = signal['pair']
+                entry_price = signal['entry_price']
+                direction = signal['direction']
+                current_price = current_forex_data.get(pair, entry_price)
+                
+                if direction == "CALL":
+                    is_winner = current_price > entry_price
+                else:
+                    is_winner = current_price < entry_price
+                
+                price_change = current_price - entry_price
+                price_change_pct = (price_change / entry_price) * 100
+                
+                signal['outcome'] = 'WIN' if is_winner else 'LOSS'
+                signal['exit_price'] = round(current_price, 5)
+                signal['price_change'] = round(price_change, 5)
+                signal['price_change_pct'] = round(price_change_pct, 3)
+                signal['outcome_checked'] = True
+                signal['checked_at'] = current_time.isoformat()
+                
+                print(f"📊 {pair} {direction} - {'WIN ✅' if is_winner else 'LOSS ❌'} ({price_change_pct:+.2f}%)")
+        except:
+            pass
         
         updated_signals.append(signal)
     
@@ -118,40 +121,6 @@ def generate_signal(pair, price):
         return signal_data
     return None
 
-def generate_performance_summary(signals_history):
-    total_signals = len(signals_history)
-    completed_signals = [s for s in signals_history if s.get('outcome_checked')]
-    
-    if not completed_signals:
-        return {
-            'total_generated': total_signals,
-            'completed_trades': 0,
-            'wins': 0,
-            'losses': 0,
-            'win_rate': 0,
-            'avg_profit_pct': 0,
-            'avg_loss_pct': 0
-        }
-    
-    wins = [s for s in completed_signals if s.get('outcome') == 'WIN']
-    losses = [s for s in completed_signals if s.get('outcome') == 'LOSS']
-    
-    win_rate = (len(wins) / len(completed_signals)) * 100 if completed_signals else 0
-    avg_profit = sum([s.get('price_change_pct', 0) for s in wins]) / len(wins) if wins else 0
-    avg_loss = sum([abs(s.get('price_change_pct', 0)) for s in losses]) / len(losses) if losses else 0
-    
-    return {
-        'total_generated': total_signals,
-        'completed_trades': len(completed_signals),
-        'pending_trades': total_signals - len(completed_signals),
-        'wins': len(wins),
-        'losses': len(losses),
-        'win_rate': round(win_rate, 1),
-        'avg_profit_pct': round(avg_profit, 3),
-        'avg_loss_pct': round(avg_loss, 3),
-        'last_updated': datetime.now(timezone.utc).isoformat()
-    }
-
 def main():
     print(f"🚀 AI Trading Cycle: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
     
@@ -188,12 +157,13 @@ def main():
     with open('signals.json', 'w') as f:
         json.dump(signals_history, f, indent=2)
     
-    performance = generate_performance_summary(signals_history)
-    with open('trading_dashboard.json', 'w') as f:
-        json.dump(performance, f, indent=2)
+    completed_signals = [s for s in signals_history if s.get('outcome_checked')]
+    wins = len([s for s in completed_signals if s.get('outcome') == 'WIN'])
+    losses = len([s for s in completed_signals if s.get('outcome') == 'LOSS'])
+    win_rate = (wins / len(completed_signals) * 100) if completed_signals else 0
     
     print(f"✅ Generated {len(new_signals)} signals | Total: {len(signals_history)}")
-    print(f"📊 Performance: {performance['wins']}W/{performance['losses']}L ({performance['win_rate']:.1f}% win rate)")
+    print(f"📊 Performance: {wins}W/{losses}L ({win_rate:.1f}% win rate)")
 
 if __name__ == "__main__":
     main()
