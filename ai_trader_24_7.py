@@ -115,6 +115,13 @@ def main():
 
 if __name__ == "__main__":
     main()
+    with open('signals.json', 'w') as f:
+        json.dump(signals_history, f, indent=2)
+    
+    print(f"✅ Generated {len(new_signals)} signals | Total: {len(signals_history)}")
+
+if __name__ == "__main__":
+    main()
                 # Update signal with complete outcome data
                 signal.update({
                     'outcome': 'WIN' if is_winner else 'LOSS',
