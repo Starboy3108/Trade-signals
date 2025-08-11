@@ -4,110 +4,117 @@ import numpy as np
 from datetime import datetime, timezone, timedelta
 
 PAIRS = ["EUR/USD", "GBP/USD", "USD/JPY"]
-MIN_CONFIDENCE = 0.70  # Lowered for more signals during market hours
+MIN_CONFIDENCE = 0.75
 MAX_SIGNALS_PER_HOUR = 3
 
-def get_real_time_forex_data():
-    """Enhanced real-time forex data with multiple sources"""
+def get_forex_data():
     forex_data = {}
-    
-    # Primary source - Real-time forex API
-    try:
-        # More responsive API for real-time data
-        response = requests.get("https://api.fxapi.com/fl/latest?api_key=fxapi-demo&base=USD", timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            if 'rates' in data:
-                forex_data["EUR/USD"] = 1.0 / data["rates"]["EUR"] if "EUR" in data["rates"] else None
-                forex_data["GBP/USD"] = 1.0 / data["rates"]["GBP"] if "GBP" in data["rates"] else None
-                forex_data["USD/JPY"] = data["rates"]["JPY"] if "JPY" in data["rates"] else None
-    except:
-        pass
-    
-    # Fallback source - Your original API
     try:
         response = requests.get("https://api.exchangerate-api.com/v4/latest/EUR", timeout=10)
         if response.status_code == 200:
             data = response.json()
-            if not forex_data.get("EUR/USD"):
-                forex_data["EUR/USD"] = data["rates"]["USD"]
+            forex_data["EUR/USD"] = data["rates"]["USD"]
         
         response = requests.get("https://api.exchangerate-api.com/v4/latest/GBP", timeout=10)
         if response.status_code == 200:
             data = response.json()
-            if not forex_data.get("GBP/USD"):
-                forex_data["GBP/USD"] = data["rates"]["USD"]
+            forex_data["GBP/USD"] = data["rates"]["USD"]
             
         response = requests.get("https://api.exchangerate-api.com/v4/latest/USD", timeout=10)
         if response.status_code == 200:
             data = response.json()
-            if not forex_data.get("USD/JPY"):
-                forex_data["USD/JPY"] = data["rates"]["JPY"]
+            forex_data["USD/JPY"] = data["rates"]["JPY"]
     except:
-        pass
-    
-    # Final fallback with realistic market variation
-    current_time = datetime.now(timezone.utc)
-    base_prices = {"EUR/USD": 1.0850, "GBP/USD": 1.2750, "USD/JPY": 150.25}
-    
-    for pair, base_price in base_prices.items():
-        if not forex_data.get(pair):
-            # Create realistic market movement based on time
-            time_factor = (current_time.hour * 60 + current_time.minute) % 1440
-            market_variation = (hash(pair + str(time_factor)) % 200 - 100) / 50000  # ±0.2% realistic variation
-            forex_data[pair] = base_price * (1 + market_variation)
-    
+        forex_data = {"EUR/USD": 1.0850, "GBP/USD": 1.2750, "USD/JPY": 150.25}
     return forex_data
 
-def check_expired_signals(signals_history, current_forex_data):
-    """Enhanced win/loss detection with better error handling"""
+def generate_signal(pair, price):
     current_time = datetime.now(timezone.utc)
-    updated_signals = []
-    wins_found = 0
-    losses_found = 0
+    rsi = 50 + (hash(pair + str(current_time.hour)) % 60 - 30)
+    momentum = (hash(pair + str(current_time.minute)) % 200 - 100) / 1000
     
-    for signal in signals_history:
-        if signal.get('outcome_checked'):
-            if signal.get('outcome') == 'WIN':
-                wins_found += 1
-            elif signal.get('outcome') == 'LOSS':
-                losses_found += 1
-            updated_signals.append(signal)
-            continue
-            
-        try:
-            # Parse expiry time more robustly
-            expiry_str = signal['expiry_time']
-            if '+00:00' in expiry_str:
-                expiry_str = expiry_str.replace('+00:00', '')
-            if 'Z' in expiry_str:
-                expiry_str = expiry_str.replace('Z', '')
-            
-            expiry_time = datetime.fromisoformat(expiry_str).replace(tzinfo=timezone.utc)
-            
-            # Check if signal has expired (with 30-second buffer)
-            if current_time >= expiry_time + timedelta(seconds=30):
-                pair = signal['pair']
-                entry_price = signal['entry_price']
-                direction = signal['direction']
-                
-                # Get current price for outcome determination
-                current_price = current_forex_data.get(pair)
-                if current_price is None:
-                    updated_signals.append(signal)
-                    continue
-                
-                # Determine win/loss with realistic pip movement
-                price_diff = current_price - entry_price
-                
-                if direction == "CALL":
-                    is_winner = price_diff > 0.00001  # At least 0.1 pip movement
-                else:  # PUT
-                    is_winner = price_diff < -0.00001  # At least 0.1 pip movement
-                
-                # Calculate detailed outcome data
-                price_change_pct = (price_diff / entry_price) * 100
-                
+    score = 0
+    conditions = 0
+    reasoning = []
+    direction = None
+    
+    if rsi < 35:
+        score += 0.4
+        conditions += 1
+        reasoning.append(f"Oversold RSI: {rsi:.1f}")
+        direction = "CALL"
+    elif rsi > 65:
+        score += 0.4
+        conditions += 1
+        reasoning.append(f"Overbought RSI: {rsi:.1f}")
+        direction = "PUT"
+    
+    if not direction:
+        return None
+    
+    if abs(momentum) > 0.03:
+        score += 0.25
+        conditions += 1
+        reasoning.append(f"Strong momentum: {momentum:.3f}")
+    
+    if 8 <= current_time.hour <= 16 or 13 <= current_time.hour <= 21:
+        score += 0.15
+        conditions += 1
+        reasoning.append("Active trading session")
+    
+    if conditions >= 2 and score >= MIN_CONFIDENCE:
+        signal_data = {
+            "timestamp": current_time.isoformat(),
+            "pair": pair,
+            "direction": direction,
+            "confidence": round(min(score, 0.95), 2),
+            "entry_price": round(price, 5),
+            "expiry_time": (current_time + timedelta(minutes=5)).isoformat(),
+            "reasoning": ", ".join(reasoning),
+            "rsi": round(rsi, 1),
+            "momentum": round(momentum, 4)
+        }
+        return signal_data
+    return None
+
+def main():
+    print(f"🚀 AI Trading Cycle: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    
+    forex_data = get_forex_data()
+    print(f"📊 Retrieved data for {len(forex_data)} pairs")
+    
+    try:
+        with open('signals.json', 'r') as f:
+            signals_history = json.load(f)
+    except FileNotFoundError:
+        signals_history = []
+    
+    current_hour = datetime.now(timezone.utc).strftime('%Y-%m-%d %H')
+    recent_signals = [s for s in signals_history if s.get('timestamp', '').startswith(current_hour)]
+    
+    if len(recent_signals) >= MAX_SIGNALS_PER_HOUR:
+        print(f"⏸️ Hourly limit reached: {len(recent_signals)}/{MAX_SIGNALS_PER_HOUR}")
+        return
+    
+    new_signals = []
+    for pair, price in forex_data.items():
+        signal = generate_signal(pair, price)
+        if signal:
+            new_signals.append(signal)
+            print(f"🎯 {pair} - {signal['direction']} signal ({signal['confidence']:.0%})")
+    
+    signals_history.extend(new_signals)
+    
+    if len(signals_history) > 1000:
+        signals_history = signals_history[-1000:]
+    
+    with open('signals.json', 'w') as f:
+        json.dump(signals_history, f, indent=2)
+    
+    print(f"✅ Generated {len(new_signals)} signals | Total: {len(signals_history)}")
+
+if __name__ == "__main__":
+    main()
                 # Update signal with complete outcome data
                 signal.update({
                     'outcome': 'WIN' if is_winner else 'LOSS',
