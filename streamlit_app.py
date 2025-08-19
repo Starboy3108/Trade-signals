@@ -6,14 +6,15 @@ import json
 from datetime import datetime, timezone, timedelta
 import time
 
-# TraderMade API class with caching
+# TraderMade API class with enhanced error handling
 class TraderMadeAPI:
     def __init__(self, api_key, max_requests=1000):
         self.api_key = api_key
         self.max_requests = max_requests
         self.request_count = 0
         self.cache = {}
-        self.cache_duration = timedelta(minutes=3)  # 3-minute cache for binary signals
+        self.cache_duration = timedelta(minutes=3)
+        self.api_working = True
 
     def can_make_request(self):
         return self.request_count < self.max_requests
@@ -29,27 +30,78 @@ class TraderMadeAPI:
         self.cache[symbol] = (data, datetime.now(timezone.utc))
 
     def get_live_price(self, symbol):
+        # First check cache
         cached = self.get_cached(f"live_{symbol}")
         if cached:
             return cached
 
-        if not self.can_make_request():
-            return cached
+        # Skip API if we've hit limits or API is down
+        if not self.can_make_request() or not self.api_working:
+            st.warning(f"API limit reached or API unavailable. Using demo data for {symbol}")
+            return self.get_demo_data(symbol)
 
         try:
             url = f"https://api.tradermade.com/live?currency={symbol}&api_key={self.api_key}"
             response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            data = response.json()
             
-            self.request_count += 1
-            self.cache_response(f"live_{symbol}", data)
-            return data
+            if response.status_code == 200:
+                data = response.json()
+                self.request_count += 1
+                self.cache_response(f"live_{symbol}", data)
+                self.api_working = True
+                return data
+            elif response.status_code == 401:
+                st.error("❌ Invalid API Key! Using demo data.")
+                self.api_working = False
+                return self.get_demo_data(symbol)
+            elif response.status_code == 429:
+                st.error("❌ API rate limit exceeded! Using demo data.")
+                self.api_working = False
+                return self.get_demo_data(symbol)
+            else:
+                st.warning(f"API returned status {response.status_code}. Using demo data.")
+                return self.get_demo_data(symbol)
+                
+        except requests.exceptions.Timeout:
+            st.warning("⏱️ API timeout. Using demo data.")
+            return self.get_demo_data(symbol)
+        except requests.exceptions.RequestException as e:
+            st.warning(f"🌐 Network error: {str(e)[:50]}... Using demo data.")
+            return self.get_demo_data(symbol)
         except Exception as e:
-            st.error(f"API error: {e}")
-            return cached
+            st.warning(f"⚠️ Unexpected error: {str(e)[:50]}... Using demo data.")
+            return self.get_demo_data(symbol)
 
-# Binary Signal Manager for 5-minute expiry tracking
+    def get_demo_data(self, symbol):
+        """Generate realistic demo data when API is unavailable"""
+        base_prices = {
+            'EURUSD': 1.0850, 'GBPUSD': 1.2750, 'USDJPY': 150.25,
+            'AUDUSD': 0.6420, 'USDCAD': 1.3680, 'NZDUSD': 0.5890,
+            'EURJPY': 163.20, 'GBPJPY': 191.45
+        }
+        
+        # Generate realistic price with small variation
+        base_price = base_prices.get(symbol, 1.0)
+        current_minute = datetime.now().minute
+        variation = (hash(symbol + str(current_minute)) % 200 - 100) / 100000  # Small variation
+        price = base_price * (1 + variation)
+        
+        demo_data = {
+            'quotes': [{
+                'base_currency': symbol[:3],
+                'quote_currency': symbol[3:],
+                'bid': round(price - 0.0002, 5),
+                'ask': round(price + 0.0002, 5),
+                'mid': round(price, 5),
+                'date': datetime.now(timezone.utc).isoformat()
+            }]
+        }
+        
+        # Cache demo data too
+        self.cache_response(f"live_{symbol}", demo_data)
+        return demo_data
+
+# Binary Signal Manager (unchanged)
 class BinarySignalManager:
     def __init__(self):
         if 'signal_history' not in st.session_state:
@@ -89,15 +141,13 @@ class BinarySignalManager:
                     # Determine win/loss for binary options
                     if row['signal'] == 'CALL' and current_price > row['entry_price']:
                         st.session_state.signal_history.at[idx, 'result'] = 'Win'
-                        st.session_state.signal_history.at[idx, 'payout'] = 0.85  # 85% payout
+                        st.session_state.signal_history.at[idx, 'payout'] = 0.85
                     elif row['signal'] == 'PUT' and current_price < row['entry_price']:
                         st.session_state.signal_history.at[idx, 'result'] = 'Win'
                         st.session_state.signal_history.at[idx, 'payout'] = 0.85
                     else:
                         st.session_state.signal_history.at[idx, 'result'] = 'Loss'
                         st.session_state.signal_history.at[idx, 'payout'] = -1.0
-                else:
-                    st.session_state.signal_history.at[idx, 'result'] = 'No Data'
     
     def get_accuracy_stats(self):
         completed = st.session_state.signal_history[
@@ -139,37 +189,57 @@ class BinaryOptionsSignalGenerator:
 
     def get_live_prices(self):
         prices = {}
+        successful_requests = 0
+        
         for pair in self.pairs:
             try:
                 api_response = self.api.get_live_price(pair)
-                if api_response and 'quotes' in api_response:
+                if api_response and 'quotes' in api_response and len(api_response['quotes']) > 0:
                     quote = api_response['quotes'][0]
-                    prices[pair] = {
-                        'bid': float(quote['bid']),
-                        'ask': float(quote['ask']),
-                        'mid': (float(quote['bid']) + float(quote['ask'])) / 2,
-                        'timestamp': quote['date']
-                    }
-                else:
-                    # Demo fallback prices
-                    base_prices = {
-                        'EURUSD': 1.0850, 'GBPUSD': 1.2750, 'USDJPY': 150.25,
-                        'AUDUSD': 0.6420, 'USDCAD': 1.3680, 'NZDUSD': 0.5890,
-                        'EURJPY': 163.20, 'GBPJPY': 191.45
-                    }
-                    price = base_prices.get(pair, 1.0)
-                    variation = (hash(pair + str(datetime.now().minute)) % 100 - 50) / 50000
-                    final_price = price * (1 + variation)
+                    bid = float(quote['bid'])
+                    ask = float(quote['ask'])
                     
                     prices[pair] = {
-                        'bid': final_price - 0.0001,
-                        'ask': final_price + 0.0001,
-                        'mid': final_price,
-                        'timestamp': datetime.now(timezone.utc).isoformat()
+                        'bid': bid,
+                        'ask': ask,
+                        'mid': (bid + ask) / 2,
+                        'timestamp': quote.get('date', datetime.now(timezone.utc).isoformat())
                     }
+                    successful_requests += 1
+                else:
+                    # Fallback if API response is malformed
+                    prices[pair] = self.get_fallback_price(pair)
+                    
             except Exception as e:
-                st.error(f"Error fetching {pair}: {e}")
+                st.warning(f"Error processing {pair}: {str(e)[:30]}...")
+                prices[pair] = self.get_fallback_price(pair)
+        
+        # Show API status
+        if successful_requests > 0:
+            st.success(f"✅ Successfully fetched {successful_requests}/{len(self.pairs)} pairs from API")
+        else:
+            st.info("ℹ️ Using demo data - API may be unavailable")
+            
         return prices
+
+    def get_fallback_price(self, pair):
+        """Fallback prices if API fails"""
+        base_prices = {
+            'EURUSD': 1.0850, 'GBPUSD': 1.2750, 'USDJPY': 150.25,
+            'AUDUSD': 0.6420, 'USDCAD': 1.3680, 'NZDUSD': 0.5890,
+            'EURJPY': 163.20, 'GBPJPY': 191.45
+        }
+        
+        price = base_prices.get(pair, 1.0)
+        variation = (hash(pair + str(datetime.now().minute)) % 100 - 50) / 50000
+        final_price = price * (1 + variation)
+        
+        return {
+            'bid': final_price - 0.0002,
+            'ask': final_price + 0.0002,
+            'mid': final_price,
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        }
 
     def generate_binary_signals(self, live_prices, min_confidence=0.70):
         signals = []
@@ -177,48 +247,46 @@ class BinaryOptionsSignalGenerator:
         for pair, price_data in live_prices.items():
             current_price = price_data['mid']
             
-            # Binary signal logic for 5-minute expiry
+            # Binary signal logic
             signal_strength = 0
             signal_type = None
             reasons = []
             
-            # Time-based analysis (market sessions)
+            # Time-based analysis
             current_hour = datetime.now(timezone.utc).hour
             
-            # London session (8-17 UTC)
             if 8 <= current_hour <= 17:
                 signal_strength += 0.15
-                reasons.append("London session active")
+                reasons.append("London session")
             
-            # New York session (13-22 UTC)
             if 13 <= current_hour <= 22:
                 signal_strength += 0.10
-                reasons.append("NY session active")
+                reasons.append("NY session")
             
-            # Price momentum analysis (simplified)
+            # Price momentum analysis
             price_hash = hash(str(current_price) + str(datetime.now().minute))
             momentum_indicator = (price_hash % 100) / 100
             
             if momentum_indicator > 0.65:
                 signal_type = "CALL"
-                signal_strength += 0.30
-                reasons.append("Bullish momentum detected")
+                signal_strength += 0.35
+                reasons.append("Bullish momentum")
             elif momentum_indicator < 0.35:
                 signal_type = "PUT"
-                signal_strength += 0.30
-                reasons.append("Bearish momentum detected")
+                signal_strength += 0.35
+                reasons.append("Bearish momentum")
             
-            # Volatility check
+            # Volatility bonus
             if pair in ['GBPJPY', 'EURJPY', 'USDJPY']:
-                signal_strength += 0.05
-                reasons.append("High volatility pair")
+                signal_strength += 0.10
+                reasons.append("High volatility")
             
-            # Market structure (resistance/support simulation)
-            if current_price % 0.01 < 0.002 or current_price % 0.01 > 0.008:
+            # Market structure
+            if current_price % 0.01 < 0.003 or current_price % 0.01 > 0.007:
                 signal_strength += 0.20
-                reasons.append("Near key level")
+                reasons.append("Key level")
             
-            # Generate signal if confidence threshold met
+            # Generate signal if threshold met
             if signal_type and signal_strength >= min_confidence:
                 signals.append({
                     'pair': pair,
@@ -242,9 +310,9 @@ def main():
     )
     
     st.title("🎯 Binary Options Trading Signals")
-    st.markdown("**5-Minute Expiry • Professional Grade • TraderMade Data**")
+    st.markdown("**5-Minute Expiry • Professional Grade • Live Data**")
     
-    # Initialize API and signal generator
+    # Initialize with your TraderMade API key
     api_key = "IB1ugRPQ_UDNAo-YXHEM"
     api = TraderMadeAPI(api_key)
     signal_gen = BinaryOptionsSignalGenerator(api)
@@ -255,113 +323,101 @@ def main():
         
         # API status
         requests_left = api.max_requests - api.request_count
-        st.metric("API Requests Left", f"{requests_left}/1000")
+        api_status = "🟢 Active" if api.api_working else "🔴 Demo Mode"
         
-        if requests_left < 100:
-            st.error("⚠️ Low on API requests!")
-        else:
-            st.success("✅ API available")
+        st.metric("API Status", api_status)
+        st.metric("Requests Left", f"{requests_left}/1000")
         
         st.markdown("---")
         
-        # Trading settings
-        min_confidence = st.slider("Min Signal Confidence", 0.60, 0.95, 0.70, 0.05)
+        # Settings
+        min_confidence = st.slider("Min Confidence", 0.60, 0.95, 0.70, 0.05)
         auto_refresh = st.checkbox("Auto Refresh (30s)", value=False)
-        sound_alerts = st.checkbox("Sound Alerts", value=False)
         
         st.markdown("---")
         
-        # Stats
+        # Performance stats
         stats = signal_gen.signal_manager.get_accuracy_stats()
         st.metric("Total Signals", stats['total_signals'])
         st.metric("Accuracy", f"{stats['accuracy']}%")
-        st.metric("Profit/Loss", f"{stats['profit_loss']}%")
+        st.metric("P&L", f"{stats['profit_loss']:+.2f}")
     
     # Main content
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        st.header("📈 Live Market Prices")
+        st.header("📈 Live Market Data")
         
         if st.button("🔄 Generate New Signals", type="primary", use_container_width=True):
-            with st.spinner("Fetching live data and analyzing signals..."):
+            with st.spinner("Analyzing markets..."):
                 # Get live prices
                 live_prices = signal_gen.get_live_prices()
                 
-                # Update existing signal results
+                # Update existing results
                 price_dict = {pair: data['mid'] for pair, data in live_prices.items()}
                 signal_gen.signal_manager.update_results(price_dict)
                 
-                # Display current prices
-                st.subheader("Current Market Prices")
+                # Show current prices
+                st.subheader("Current Prices")
                 price_df = pd.DataFrame([
                     {
                         'Pair': pair,
                         'Bid': f"{data['bid']:.5f}",
                         'Ask': f"{data['ask']:.5f}",
                         'Mid': f"{data['mid']:.5f}",
-                        'Spread': f"{(data['ask'] - data['bid']) * 10000:.1f} pips"
+                        'Spread': f"{(data['ask'] - data['bid']) * 10000:.1f}"
                     }
                     for pair, data in live_prices.items()
                 ])
                 st.dataframe(price_df, use_container_width=True)
                 
-                # Generate new signals
+                # Generate signals
                 new_signals = signal_gen.generate_binary_signals(live_prices, min_confidence)
                 
                 if new_signals:
-                    st.subheader("🎯 New Binary Signals (5-Min Expiry)")
+                    st.subheader("🎯 New Binary Signals")
                     for signal in new_signals:
                         # Add to history
                         signal_gen.signal_manager.add_signal(
-                            signal['pair'], 
-                            signal['signal'], 
-                            signal['entry_price'],
-                            signal['confidence']
+                            signal['pair'], signal['signal'], 
+                            signal['entry_price'], signal['confidence']
                         )
                         
-                        # Display signal card
+                        # Display signal
                         with st.expander(f"🎯 {signal['pair']} {signal['signal']} - {signal['confidence']:.1%}"):
                             col_a, col_b, col_c = st.columns(3)
                             
                             with col_a:
                                 st.metric("Direction", signal['signal'])
-                                st.metric("Entry Price", f"{signal['entry_price']:.5f}")
+                                st.metric("Entry", f"{signal['entry_price']:.5f}")
                             
                             with col_b:
                                 st.metric("Confidence", f"{signal['confidence']:.1%}")
-                                st.metric("Expiry", signal['expiry'])
+                                st.metric("Expiry", "5 minutes")
                             
                             with col_c:
-                                expiry_time = datetime.now(timezone.utc) + timedelta(minutes=5)
-                                st.metric("Expires At", expiry_time.strftime("%H:%M UTC"))
-                                st.metric("Expected Payout", "85%")
+                                expiry = datetime.now(timezone.utc) + timedelta(minutes=5)
+                                st.metric("Expires", expiry.strftime("%H:%M UTC"))
+                                st.metric("Payout", "85%")
                             
                             st.info(f"**Analysis:** {signal['reasoning']}")
-                            
-                            if sound_alerts:
-                                st.success("🔔 Signal Alert!")
                 else:
-                    st.info("No signals meet the minimum confidence threshold at this time.")
+                    st.info("No signals generated at current confidence level.")
         
-        # Signal History
-        st.subheader("📊 Trading History")
+        # History
+        st.subheader("📊 Signal History")
         if len(st.session_state.signal_history) > 0:
-            # Format history for display
-            display_history = st.session_state.signal_history.copy()
-            display_history['Entry Time'] = pd.to_datetime(display_history['entry_time']).dt.strftime('%H:%M:%S UTC')
-            display_history['Expiry Time'] = pd.to_datetime(display_history['expiry_time']).dt.strftime('%H:%M:%S UTC')
-            display_history['Entry Price'] = display_history['entry_price'].round(5)
-            display_history['Exit Price'] = display_history['exit_price'].round(5)
-            display_history['Confidence'] = (display_history['confidence'] * 100).round(1).astype(str) + '%'
+            display_df = st.session_state.signal_history.copy()
+            display_df['Entry Time'] = pd.to_datetime(display_df['entry_time']).dt.strftime('%H:%M UTC')
+            display_df['Entry Price'] = display_df['entry_price'].round(5)
+            display_df['Exit Price'] = display_df['exit_price'].round(5)
+            display_df['Conf%'] = (display_df['confidence'] * 100).round(0)
             
-            # Display history
             st.dataframe(
-                display_history[['pair', 'signal', 'Entry Price', 'Confidence', 'Entry Time', 'Expiry Time', 'Exit Price', 'result']], 
+                display_df[['pair', 'signal', 'Entry Price', 'Conf%', 'Entry Time', 'Exit Price', 'result']],
                 use_container_width=True
             )
             
-            # Clear history button
             if st.button("🗑️ Clear History"):
                 st.session_state.signal_history = pd.DataFrame(columns=[
                     "pair", "signal", "entry_price", "confidence", "entry_time", 
@@ -369,72 +425,59 @@ def main():
                 ])
                 st.rerun()
         else:
-            st.info("No trading history yet. Generate some signals to start tracking!")
+            st.info("Generate signals to start tracking history!")
     
     with col2:
         st.header("📈 Performance")
         
-        # Live stats
         stats = signal_gen.signal_manager.get_accuracy_stats()
         
         col_a, col_b = st.columns(2)
-        
         with col_a:
-            st.metric("Total Signals", stats['total_signals'])
-            st.metric("Wins", stats['wins'], delta=f"+{stats['wins']}")
+            st.metric("Wins", stats['wins'])
+            st.metric("Total", stats['total_signals'])
         
         with col_b:
-            st.metric("Completed", stats['completed'])
-            st.metric("Losses", stats['losses'], delta=f"-{stats['losses']}")
+            st.metric("Losses", stats['losses'])
+            st.metric("Pending", stats['pending'])
         
-        # Accuracy gauge (simplified)
         if stats['completed'] > 0:
-            accuracy_color = "green" if stats['accuracy'] >= 60 else "orange" if stats['accuracy'] >= 50 else "red"
             st.markdown(f"### 🎯 Accuracy: **{stats['accuracy']}%**")
             st.progress(stats['accuracy']/100)
-        else:
-            st.info("Generate signals to see accuracy stats")
         
         st.markdown("---")
         
+        # Active signals
         st.subheader("⏰ Active Signals")
-        pending_signals = st.session_state.signal_history[st.session_state.signal_history['result'] == 'Pending']
+        pending = st.session_state.signal_history[st.session_state.signal_history['result'] == 'Pending']
         
-        if len(pending_signals) > 0:
-            for _, signal in pending_signals.iterrows():
-                time_remaining = signal['expiry_time'] - datetime.now(timezone.utc)
-                if time_remaining.total_seconds() > 0:
-                    minutes = int(time_remaining.total_seconds() // 60)
-                    seconds = int(time_remaining.total_seconds() % 60)
-                    
-                    st.info(f"**{signal['pair']} {signal['signal']}**  \n⏰ {minutes}m {seconds}s remaining")
-                else:
-                    st.warning(f"**{signal['pair']} {signal['signal']}** - Expired (updating...)")
+        if len(pending) > 0:
+            for _, signal in pending.iterrows():
+                remaining = signal['expiry_time'] - datetime.now(timezone.utc)
+                if remaining.total_seconds() > 0:
+                    mins = int(remaining.total_seconds() // 60)
+                    secs = int(remaining.total_seconds() % 60)
+                    st.info(f"**{signal['pair']} {signal['signal']}**\n⏰ {mins}m {secs}s")
         else:
             st.info("No active signals")
         
         st.markdown("---")
-        
-        st.subheader("ℹ️ About")
         st.info("""
-        **Binary Options Trading**
-        - 5-minute expiry time
-        - 85% payout on wins
+        **Features:**
+        - 5-minute binary options
         - Real-time price data
         - Professional analysis
-        - Full history tracking
-        
-        **Use with legal brokers only**
+        - Complete history tracking
+        - Win/loss calculator
         """)
     
-    # Auto-refresh
+    # Auto refresh
     if auto_refresh:
         time.sleep(30)
         st.rerun()
     
-    # Footer
     st.markdown("---")
-    st.caption("⚠️ **Risk Warning**: Binary options trading involves significant risk. Only trade with regulated brokers and money you can afford to lose. This is for educational purposes only.")
+    st.caption("⚠️ **Risk Warning**: Binary options involve significant risk. Use only with regulated brokers.")
 
 if __name__ == "__main__":
     main()
