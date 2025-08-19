@@ -4,8 +4,6 @@ import pandas as pd
 import numpy as np
 import json
 from datetime import datetime, timezone, timedelta
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import time
 
 # TraderMade API class with caching
@@ -357,18 +355,11 @@ def main():
             display_history['Exit Price'] = display_history['exit_price'].round(5)
             display_history['Confidence'] = (display_history['confidence'] * 100).round(1).astype(str) + '%'
             
-            # Color-code results
-            def color_result(val):
-                if val == 'Win':
-                    return 'background-color: #d4edda'
-                elif val == 'Loss':
-                    return 'background-color: #f8d7da'
-                else:
-                    return 'background-color: #fff3cd'
-            
-            styled_history = display_history[['pair', 'signal', 'Entry Price', 'Confidence', 'Entry Time', 'Expiry Time', 'Exit Price', 'result']].style.applymap(color_result, subset=['result'])
-            
-            st.dataframe(styled_history, use_container_width=True)
+            # Display history
+            st.dataframe(
+                display_history[['pair', 'signal', 'Entry Price', 'Confidence', 'Entry Time', 'Expiry Time', 'Exit Price', 'result']], 
+                use_container_width=True
+            )
             
             # Clear history button
             if st.button("🗑️ Clear History"):
